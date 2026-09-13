@@ -618,11 +618,17 @@
     font-size: calc(16px * var(--font-scale, 1));
     line-height: 1.8;
     color: var(--ink);
-    margin: 0 0 14px;
+    margin: 0 0 2px;
+    padding: 4px 12px;
+    border-radius: 8px;
   }
 
   .reader-text:last-child {
     margin-bottom: 0;
+  }
+
+  .reader-text:nth-child(odd) {
+    background: var(--paper-deep);
   }
 
   .reader-arabic {
