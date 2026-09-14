@@ -6,6 +6,14 @@
 <title>Cevşen Listesi</title>
 <link rel="icon" type="image/png" href="favicon.png">
 
+<!-- PWA: telefonun ana ekranına eklenebilmesi için -->
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#1E4D3B">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Cevşen Listesi">
+
 <!-- Open Graph / WhatsApp link preview — requires og-image.png uploaded in the same folder as this file -->
 <meta property="og:title" content="Cevşen Listesi — Bâb Dağılımı">
 <meta property="og:description" content="Boş bir bâba dokun, ismini yaz, senin olsun.">
@@ -1131,17 +1139,35 @@ function applyReaderFontScale() {
   if (contentEl) contentEl.style.setProperty('--font-scale', readerFontScale);
 }
 
+let readerHistoryPushed = false;
+
 function openReader(index) {
   activeIndex = index;
   readerTab = 'arabic';
   renderReader();
   document.getElementById('readerScreen').classList.add('open');
+  if (!readerHistoryPushed) {
+    history.pushState({ cevsenReader: true }, '');
+    readerHistoryPushed = true;
+  }
 }
 
 function closeReader() {
   document.getElementById('readerScreen').classList.remove('open');
   activeIndex = null;
+  if (readerHistoryPushed) {
+    readerHistoryPushed = false;
+    history.back();
+  }
 }
+
+window.addEventListener('popstate', () => {
+  if (readerHistoryPushed) {
+    readerHistoryPushed = false;
+    document.getElementById('readerScreen').classList.remove('open');
+    activeIndex = null;
+  }
+});
 
 function goToBap(delta) {
   const newIndex = activeIndex + delta;
@@ -1703,7 +1729,8 @@ function openMainMenu() {
     '<button class="btn btn-ghost" id="menuQr" style="width:100%; margin-bottom:8px;">QR kod</button>' +
     '<button class="btn btn-ghost" id="menuTurList" style="width:100%; margin-bottom:8px;">Cevşen Turları</button>' +
     '<button class="btn btn-help" id="menuNewTur" style="width:100%; margin-bottom:8px;">Yeni Tur Ekle</button>' +
-    '<button class="btn btn-danger" id="menuReset" style="width:100%;">Bu Turu Sıfırla</button>' +
+    '<button class="btn btn-danger" id="menuReset" style="width:100%; margin-bottom:8px;">Bu Turu Sıfırla</button>' +
+    '<button class="btn btn-ghost" id="menuGoHatim" style="width:100%;">📖 Hatim Listesi\'ne Geç</button>' +
     '<div class="modal-actions" style="margin-top:12px;"><button class="btn btn-ghost" id="menuCloseBtn">Kapat</button></div>';
   document.getElementById('menuAdminToggle').addEventListener('click', () => {
     if (adminMode) { disableAdminMode(); } else { openAdminModeModal(); }
@@ -1716,6 +1743,7 @@ function openMainMenu() {
   document.getElementById('menuTurList').addEventListener('click', openTurList);
   document.getElementById('menuNewTur').addEventListener('click', () => requireAdmin(startNewTur));
   document.getElementById('menuReset').addEventListener('click', () => requireAdmin(resetAll));
+  document.getElementById('menuGoHatim').addEventListener('click', () => { window.location.href = 'https://sadikerd.github.io/hatim-listesi/'; });
   document.getElementById('menuCloseBtn').addEventListener('click', closeModal);
   overlay.classList.add('open');
 }
