@@ -626,8 +626,8 @@
     font-size: calc(16px * var(--font-scale, 1));
     line-height: 1.8;
     color: var(--ink);
-    margin: 0 0 2px;
-    padding: 4px 12px;
+    margin: 0 0 8px;
+    padding: 2px 12px;
     border-radius: 8px;
   }
 
@@ -642,7 +642,7 @@
   .reader-arabic {
     font-family: 'Shaikh Hamdullah Mushaf', 'Amiri', serif;
     font-size: calc(26px * var(--font-scale, 1));
-    line-height: 2.1;
+    line-height: 1.4;
     color: var(--emerald-deep);
     text-align: right;
   }
@@ -1229,6 +1229,7 @@ function renderReader() {
       .map((line) => '<p class="reader-text reader-okunus">' + escapeHtml(line) + '</p>')
       .join('');
   }
+  contentEl.scrollTop = 0;
 
   const footerEl = document.getElementById('readerFooter');
   if (entry && entry.completed) {
