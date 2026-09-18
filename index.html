@@ -626,7 +626,7 @@
     font-size: calc(16px * var(--font-scale, 1));
     line-height: 1.8;
     color: var(--ink);
-    margin: 0 0 8px;
+    margin: 0 0 2px;
     padding: 2px 12px;
     border-radius: 8px;
   }
@@ -645,6 +645,7 @@
     line-height: 1.4;
     color: var(--emerald-deep);
     text-align: right;
+    margin-bottom: 8px;
   }
 
   .reader-meal,
@@ -1141,11 +1142,35 @@ function applyReaderFontScale() {
 
 let readerHistoryPushed = false;
 
+let wakeLock = null;
+
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (e) { /* desteklenmiyor olabilir, sorun değil */ }
+}
+
+function releaseWakeLock() {
+  if (wakeLock) {
+    wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && document.getElementById('readerScreen').classList.contains('open')) {
+    requestWakeLock();
+  }
+});
+
 function openReader(index) {
   activeIndex = index;
   readerTab = 'arabic';
   renderReader();
   document.getElementById('readerScreen').classList.add('open');
+  requestWakeLock();
   if (!readerHistoryPushed) {
     history.pushState({ cevsenReader: true }, '');
     readerHistoryPushed = true;
@@ -1155,6 +1180,7 @@ function openReader(index) {
 function closeReader() {
   document.getElementById('readerScreen').classList.remove('open');
   activeIndex = null;
+  releaseWakeLock();
   if (readerHistoryPushed) {
     readerHistoryPushed = false;
     history.back();
@@ -1166,6 +1192,7 @@ window.addEventListener('popstate', () => {
     readerHistoryPushed = false;
     document.getElementById('readerScreen').classList.remove('open');
     activeIndex = null;
+    releaseWakeLock();
   }
 });
 
