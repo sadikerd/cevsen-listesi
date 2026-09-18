@@ -47,6 +47,7 @@ sistemini paylaşır ama tamamen ayrı bir Firebase projesi ve veritabanı kulla
 | 2.1 | Arapça/meal/okunuş her cümle ayrı satırda; yazı boyutu kontrolü; herkul.org fontu |
 | 2.2 | "En Çok Katkı Sağlayanlar" tablosu eklendi |
 | 2.3 | Telefon ana ekranına uygulama gibi eklenebiliyor (PWA); menüden Hatim Listesi'ne geçiş linki eklendi |
+| 2.4 | Arapça satır aralığı sıkılaştırıldı; bâp değişince sayfa otomatik üste kayıyor; okuma sırasında ekranın kararmasını önleyen "wake lock" eklendi |
 
 ---
 <p align="center"><i>Harmonie31 için sevgiyle hazırlandı 🌙</i></p>
