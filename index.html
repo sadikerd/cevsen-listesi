@@ -226,6 +226,58 @@
     overflow-y: auto;
   }
 
+  .who-bar-list {
+    list-style: none;
+    margin: 0 0 14px;
+    padding: 0;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .who-bar-row {
+    margin-bottom: 12px;
+  }
+
+  .who-bar-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 4px;
+    font-size: 14px;
+  }
+
+  .who-bar-label span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  .who-bar-count {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+
+  .who-bar-track {
+    height: 8px;
+    background: var(--paper-deep);
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+
+  .who-bar-fill {
+    height: 100%;
+    background: var(--emerald);
+    border-radius: 4px;
+    transition: width 0.4s ease;
+  }
+
   .who-took-list li {
     display: flex;
     justify-content: space-between;
@@ -272,11 +324,63 @@
     margin-bottom: 4px;
   }
 
+  .grid-wrap {
+    position: relative;
+  }
+
   .grid {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: 8px;
     margin-top: 10px;
+  }
+
+  .grid.blurred {
+    filter: blur(7px);
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .tur-lock-overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+  }
+
+  .tur-lock-overlay.show {
+    display: flex;
+  }
+
+  .tur-lock-card {
+    background: var(--white);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 10px 26px rgba(38, 48, 31, 0.25);
+    max-width: 260px;
+    width: 100%;
+  }
+
+  .tur-lock-card p {
+    font-weight: 600;
+    color: var(--emerald-deep);
+    margin: 0 0 12px;
+  }
+
+  .tur-lock-card input {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+    margin-bottom: 10px;
+    background: var(--paper);
+    color: var(--ink);
   }
 
   @media (min-width: 480px) {
@@ -768,7 +872,10 @@
   <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
   <div class="progress-label" id="progressLabel">Yükleniyor…</div>
 
-  <div id="grid" class="grid"></div>
+  <div class="grid-wrap" id="gridWrap">
+    <div id="grid" class="grid"></div>
+    <div class="tur-lock-overlay" id="turLockOverlay"></div>
+  </div>
 
   <p class="note" id="footNote"></p>
 </div>
@@ -848,7 +955,52 @@ const CEVSEN_DATA = {1:{a:'اَللّٰهُمَّ اِنِّٓى اَسْئَل�
 // state = { hatims: [ { id, hatimName, hatimStart, targetDate, description, createdDate, celebrated,
 //   cuzler: [{name, date, completed, completedDate}|null, ...100] }, ... ] }
 let state = null;
-let selectedHatimId = null;
+function getStoredSelectedHatimId() {
+  try { return localStorage.getItem('cevsenSelectedHatimId') || null; } catch (e) { return null; }
+}
+
+function setSelectedHatimId(id) {
+  selectedHatimId = id;
+  try {
+    if (id) localStorage.setItem('cevsenSelectedHatimId', id);
+    else localStorage.removeItem('cevsenSelectedHatimId');
+  } catch (e) { /* sorun değil */ }
+}
+
+let selectedHatimId = getStoredSelectedHatimId();
+
+// Kilidi açtığın turlar 15 dakika boyunca hatırlanır (tarayıcında, localStorage'da) — süre dolunca tekrar şifre sorulur.
+const UNLOCK_MINUTES = 15;
+
+function loadUnlockedTurs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('cevsenUnlockedTurs') || '{}');
+    const now = Date.now();
+    const valid = {};
+    Object.keys(raw).forEach((id) => { if (raw[id] > now) valid[id] = raw[id]; });
+    return valid;
+  } catch (e) { return {}; }
+}
+
+function saveUnlockedTurs() {
+  try { localStorage.setItem('cevsenUnlockedTurs', JSON.stringify(unlockedTurs)); } catch (e) { /* sorun değil */ }
+}
+
+let unlockedTurs = loadUnlockedTurs(); // { turId: bitişZamanı(ms) }
+
+function unlockTurFor(turId) {
+  unlockedTurs[turId] = Date.now() + UNLOCK_MINUTES * 60 * 1000;
+  saveUnlockedTurs();
+}
+
+function isTurUnlocked(turId) {
+  const exp = unlockedTurs[turId];
+  return !!(exp && exp > Date.now());
+}
+
+function isTurLocked(h) {
+  return !!(h && h.turPassword && !isTurUnlocked(h.id) && !adminMode);
+}
 let activeIndex = null;
 
 const gridEl = document.getElementById('grid');
@@ -871,7 +1023,9 @@ const menuBtn = document.getElementById('menuBtn');
 
 let storageOk = true;
 let adminMode = false;
-let viewMode = 'grid';
+let viewMode = (function () {
+  try { return localStorage.getItem('cevsenViewMode') || 'grid'; } catch (e) { return 'grid'; }
+})();
 let countdownTimer = null;
 const MASTER_PIN = '1001'; // yönetici şifresi — dilersen değiştir
 
@@ -902,6 +1056,7 @@ function freshTur(name) {
     description: 'Boş bir bâba dokunup ismini yaz, senin olsun.',
     createdDate: todayStr(),
     celebrated: false,
+    turPassword: null,
     cuzler: new Array(TOTAL).fill(null)
   };
 }
@@ -940,7 +1095,7 @@ function getSelectedTur() {
   let h = state.hatims.find((x) => x.id === selectedHatimId);
   if (!h) {
     h = state.hatims[0];
-    selectedHatimId = h.id;
+    setSelectedHatimId(h.id);
   }
   return h;
 }
@@ -1017,6 +1172,7 @@ function render() {
     hideLoadingScreen();
     return;
   }
+  const locked = isTurLocked(h);
   const cuzler = h.cuzler;
   const takenCount = cuzler.filter(Boolean).length;
   const completedCount = cuzler.filter((e) => e && e.completed).length;
@@ -1024,7 +1180,7 @@ function render() {
   progressLabel.textContent = takenCount + ' / ' + TOTAL + ' bâb alındı, ' + completedCount + ' okundu';
   footNote.textContent = adminMode
     ? '🔓 Yönetici modu açık — ismi/tarihleri/açıklamayı değiştirebilir, herhangi bir bâbı boşaltabilirsin.'
-    : 'Bu liste herkese açık — burada kim neyi aldığını görebilir.';
+    : (h.turPassword ? '🔒 Bu tur özel — şifreyi bilenler bâbları açabilir.' : 'Bu liste herkese açık — burada kim neyi aldığını görebilir.');
   roundValue.textContent = h.hatimName || 'Girilmedi';
   startValue.textContent = h.hatimStart || 'Girilmedi';
   targetDateValue.textContent = h.targetDate || 'Girilmedi';
@@ -1032,7 +1188,7 @@ function render() {
   menuBtn.textContent = adminMode ? '☰ Menü 🔓' : '☰ Menü';
   updateCountdown();
 
-  gridEl.className = 'grid' + (viewMode === 'list' ? ' list-mode' : '');
+  gridEl.className = 'grid' + (viewMode === 'list' ? ' list-mode' : '') + (locked ? ' blurred' : '');
   viewGridBtn.className = 'view-toggle-btn' + (viewMode === 'grid' ? ' active' : '');
   viewListBtn.className = 'view-toggle-btn' + (viewMode === 'list' ? ' active' : '');
   gridEl.innerHTML = '';
@@ -1053,7 +1209,36 @@ function render() {
     gridEl.appendChild(tile);
   }
 
+  const lockOverlay = document.getElementById('turLockOverlay');
+  if (locked) {
+    lockOverlay.className = 'tur-lock-overlay show';
+    lockOverlay.innerHTML =
+      '<div class="tur-lock-card">' +
+        '<p>🔒 Bu tur özel</p>' +
+        '<input type="password" id="turUnlockInput" placeholder="Şifre" autocomplete="off">' +
+        '<button class="btn btn-primary" id="turUnlockBtn" style="width:100%;">Kilidi Aç</button>' +
+      '</div>';
+    document.getElementById('turUnlockBtn').addEventListener('click', () => tryUnlockTur(h.id));
+    document.getElementById('turUnlockInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') tryUnlockTur(h.id); });
+  } else {
+    lockOverlay.className = 'tur-lock-overlay';
+    lockOverlay.innerHTML = '';
+  }
+
   hideLoadingScreen();
+}
+
+function tryUnlockTur(turId) {
+  const input = document.getElementById('turUnlockInput');
+  const h = (state.hatims || []).find((x) => x.id === turId);
+  if (!h) return;
+  const entered = input.value;
+  if (entered === h.turPassword || entered === MASTER_PIN) {
+    unlockTurFor(turId);
+    render();
+  } else {
+    showMessage('Şifre yanlış.');
+  }
 }
 
 function escapeHtml(str) {
@@ -1496,6 +1681,7 @@ function renderCountdownNow() {
 
 function openWhoTook() {
   const h = getSelectedTur();
+  if (isTurLocked(h)) { showMessage('Bu tur özel — önce kilidi açman gerekiyor.'); return; }
   const counts = {};
   h.cuzler.forEach((entry) => {
     if (!entry) return;
@@ -1503,17 +1689,23 @@ function openWhoTook() {
     counts[entry.name].total++;
     if (entry.completed) counts[entry.name].completed++;
   });
-  const names = Object.keys(counts).sort((a, b) => counts[b].total - counts[a].total || a.localeCompare(b));
+  const names = Object.keys(counts).sort((a, b) => counts[b].completed - counts[a].completed || a.localeCompare(b));
   let listHtml;
   if (names.length === 0) {
     listHtml = '<p class="sub">Henüz kimse bâb almadı.</p>';
   } else {
-    listHtml = '<ul class="who-took-list">' +
-      names.map((n) => '<li><span>' + escapeHtml(n) + '</span><span class="count">' + counts[n].completed + ' / ' + counts[n].total + ' okundu</span></li>').join('') +
+    listHtml = '<ul class="who-bar-list">' +
+      names.map((n) => {
+        const pct = Math.round((counts[n].completed / TOTAL) * 100);
+        return '<li class="who-bar-row">' +
+          '<div class="who-bar-label"><span>' + escapeHtml(n) + '</span><span class="who-bar-count">' + counts[n].completed + ' / ' + TOTAL + '</span></div>' +
+          '<div class="who-bar-track"><div class="who-bar-fill" style="width:' + pct + '%;"></div></div>' +
+          '</li>';
+      }).join('') +
       '</ul>';
   }
   modalContent.innerHTML =
-    '<h2>Kim Aldı?</h2>' + listHtml +
+    '<h2>Kim Okudu?</h2>' + listHtml +
     '<div class="modal-actions"><button class="btn btn-primary" id="whoTookCloseBtn">Kapat</button></div>';
   document.getElementById('whoTookCloseBtn').addEventListener('click', closeModal);
   overlay.classList.add('open');
@@ -1522,6 +1714,7 @@ function openWhoTook() {
 function openLeaderboard() {
   const counts = {};
   (state.hatims || []).forEach((h) => {
+    if (isTurLocked(h)) return; // özel ve kilitli turların isimleri sızmasın
     (h.cuzler || []).forEach((entry) => {
       if (!entry) return;
       if (!counts[entry.name]) counts[entry.name] = { total: 0, completed: 0 };
@@ -1560,12 +1753,152 @@ function openQrModal() {
   overlay.classList.add('open');
 }
 
+function loadImageSafe(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('image failed'));
+    img.src = src;
+  });
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function fitTextFont(ctx, text, maxWidth, startSize, family, weight) {
+  let size = startSize;
+  ctx.font = weight + ' ' + size + 'px ' + family;
+  while (ctx.measureText(text).width > maxWidth && size > 24) {
+    size -= 2;
+    ctx.font = weight + ' ' + size + 'px ' + family;
+  }
+  return size;
+}
+
+async function shareProgressImage() {
+  const h = getSelectedTur();
+  if (isTurLocked(h)) { showMessage('Bu tur özel — önce kilidi açman gerekiyor.'); return; }
+  const completedCount = h.cuzler.filter((e) => e && e.completed).length;
+  const takenCount = h.cuzler.filter(Boolean).length;
+  const pct = completedCount / TOTAL;
+
+  const W = 1080, H = 1080;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  // Arka plan
+  ctx.fillStyle = '#F5EFE1';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#143327';
+  ctx.fillRect(0, 0, W, 10);
+  ctx.fillRect(0, H - 10, W, 10);
+
+  // Logo (varsa) — dairesel
+  try {
+    const logo = await loadImageSafe('logo.png');
+    const size = 170, cx = W / 2, cy = 155;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(logo, cx - size / 2, cy - size / 2, size, size);
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = '#D9C68F';
+    ctx.stroke();
+  } catch (e) { /* logo yüklenemedi, sorun değil */ }
+
+  ctx.textAlign = 'center';
+
+  // Üst etiket
+  ctx.fillStyle = '#B08A2E';
+  ctx.font = '600 30px "Work Sans", sans-serif';
+  ctx.fillText('CEVŞEN LİSTESİ', W / 2, 300);
+
+  // Tur adı
+  const turName = h.hatimName || 'Cevşen';
+  ctx.fillStyle = '#143327';
+  const nameFont = fitTextFont(ctx, turName, W - 160, 62, "'Amiri', serif", '700');
+  ctx.font = '700 ' + nameFont + "px 'Amiri', serif";
+  ctx.fillText(turName, W / 2, 400);
+
+  // Büyük sayı
+  ctx.fillStyle = '#1E4D3B';
+  ctx.font = "700 150px 'Amiri', serif";
+  ctx.fillText(completedCount + ' / ' + TOTAL, W / 2, 610);
+
+  ctx.fillStyle = '#5B6350';
+  ctx.font = '500 34px "Work Sans", sans-serif';
+  ctx.fillText('bâb tamamlandı', W / 2, 665);
+
+  // İlerleme çubuğu
+  const barW = 820, barH = 34, barX = (W - barW) / 2, barY = 730;
+  ctx.fillStyle = '#ECE3CC';
+  roundRectPath(ctx, barX, barY, barW, barH, barH / 2);
+  ctx.fill();
+  ctx.strokeStyle = '#D8CBA8';
+  ctx.lineWidth = 2;
+  roundRectPath(ctx, barX, barY, barW, barH, barH / 2);
+  ctx.stroke();
+  if (pct > 0) {
+    ctx.fillStyle = '#1E4D3B';
+    roundRectPath(ctx, barX, barY, Math.max(barH, barW * pct), barH, barH / 2);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = '#5B6350';
+  ctx.font = '400 28px "Work Sans", sans-serif';
+  ctx.fillText(takenCount + ' / ' + TOTAL + ' bâb alınmış', W / 2, 815);
+
+  ctx.fillStyle = '#B08A2E';
+  ctx.font = '500 26px "Work Sans", sans-serif';
+  ctx.fillText('Harmonie31', W / 2, H - 60);
+
+  canvas.toBlob(async (blob) => {
+    if (!blob) { showMessage('Görsel oluşturulamadı.'); return; }
+    const fileName = 'cevsen-ozet.png';
+    try {
+      const file = new File([blob], fileName, { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: 'Cevşen Özet',
+          text: (h.hatimName || 'Cevşen') + ' — ' + completedCount + '/' + TOTAL + ' tamamlandı 🌙'
+        });
+        return;
+      }
+    } catch (e) { /* paylaşım iptal edildi/desteklenmiyor — indirmeye düş */ }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showMessage('Görsel indirildi — bu tarayıcı direkt paylaşımı desteklemiyor. İndirilen resmi WhatsApp\'a elle ekleyip gönderebilirsin.');
+  }, 'image/png');
+}
+
 function shareOnWhatsApp() {
   const h = getSelectedTur();
+  if (isTurLocked(h)) { showMessage('Bu tur özel — önce kilidi açman gerekiyor.'); return; }
   const takenCount = h.cuzler.filter(Boolean).length;
   const completedCount = h.cuzler.filter((e) => e && e.completed).length;
-  const emptyNumbers = [];
-  h.cuzler.forEach((entry, i) => { if (!entry) emptyNumbers.push(i + 1); });
+  const notCompletedCount = TOTAL - completedCount;
   const url = window.location.href;
   const lines = [];
   lines.push('*' + (h.hatimName || 'Cevşen') + '*' + ' için bâb paylaşımı 🌙');
@@ -1573,12 +1906,11 @@ function shareOnWhatsApp() {
   lines.push('*Açılma tarihi:* ' + (h.hatimStart || 'girilmedi'));
   lines.push('*Son okuma tarihi:* ' + (h.targetDate || 'girilmedi'));
   lines.push('');
-  lines.push('*' + takenCount + ' / ' + TOTAL + '* bâb alındı, *' + completedCount + '* okundu.');
-  lines.push('');
-  if (emptyNumbers.length > 0) {
-    lines.push('*Boş bâblar:* ' + emptyNumbers.join(', '));
+  lines.push('*' + takenCount + ' / ' + TOTAL + '* bâb alındı.');
+  if (completedCount === TOTAL) {
+    lines.push('*Tüm bâblar okundu* 🎉');
   } else {
-    lines.push('*Boş bâb kalmadı* 🎉');
+    lines.push('*' + completedCount + '* bâb okundu, *' + notCompletedCount + '* bâb okunmadı.');
   }
   lines.push('');
   lines.push('Boş bir bâbı almak için linke gir:');
@@ -1675,11 +2007,43 @@ function startNewTur() {
     if (!state.hatims) state.hatims = [];
     const newTur = freshTur('');
     state.hatims.unshift(newTur);
-    selectedHatimId = newTur.id;
+    setSelectedHatimId(newTur.id);
     await saveState();
     render();
-    openRoundEditor();
+    openNewTurSetupModal(newTur.id);
   });
+}
+
+function openNewTurSetupModal(turId) {
+  modalContent.innerHTML =
+    '<h2>Yeni Tur</h2>' +
+    '<p class="sub">Bu tura bir isim ver. İstersen özel yapmak için bir şifre de belirleyebilirsin (opsiyonel) — o zaman bu turun bâblarını sadece şifreyi bilenler açıp okuyabilir, listede 🔒 ile görünür.</p>' +
+    '<input type="text" id="newTurNameInput" placeholder="Tur adı" maxlength="40" autofocus>' +
+    '<input type="password" id="newTurPassInput" placeholder="Şifre (opsiyonel)" maxlength="30" autocomplete="off">' +
+    '<div class="modal-actions">' +
+      '<button class="btn btn-ghost" id="newTurCancelBtn">Vazgeç</button>' +
+      '<button class="btn btn-primary" id="newTurSaveBtn">Kaydet</button>' +
+    '</div>';
+  document.getElementById('newTurCancelBtn').addEventListener('click', closeModal);
+  const nameInput = document.getElementById('newTurNameInput');
+  const saveIt = async () => {
+    const nameVal = nameInput.value.trim();
+    const passVal = document.getElementById('newTurPassInput').value.trim();
+    if (!nameVal) { showMessage('Bir tur adı yaz.'); return; }
+    await refetchIfPossible();
+    const hh = (state.hatims || []).find((x) => x.id === turId);
+    if (!hh) { closeModal(); return; }
+    hh.hatimName = nameVal;
+    hh.turPassword = passVal || null;
+    if (passVal) unlockTurFor(turId);
+    await saveState();
+    render();
+    closeModal();
+  };
+  document.getElementById('newTurSaveBtn').addEventListener('click', saveIt);
+  nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveIt(); });
+  overlay.classList.add('open');
+  setTimeout(() => nameInput.focus(), 50);
 }
 
 function openTurList() {
@@ -1696,7 +2060,7 @@ function openTurList() {
           ? '<button class="hatim-delete-btn" data-del-id="' + h.id + '" title="Bu turu sil" style="background:none;border:none;font-size:15px;cursor:pointer;padding:2px 4px;flex-shrink:0;opacity:0.7;">🗑️</button>'
           : '';
         return '<li style="cursor:pointer;' + (isSelected ? ' font-weight:700;' : '') + '" data-id="' + h.id + '">' +
-          '<span>' + (isSelected ? '● ' : '') + escapeHtml(h.hatimName || 'Cevşen') + '</span>' +
+          '<span>' + (isSelected ? '● ' : '') + (h.turPassword ? '🔒 ' : '') + escapeHtml(h.hatimName || 'Cevşen') + '</span>' +
           '<span class="count">' + completed + ' / ' + TOTAL + ' okundu · ' + escapeHtml(h.createdDate || '') + '</span>' +
           deleteBtn +
           '</li>';
@@ -1711,7 +2075,7 @@ function openTurList() {
   document.getElementById('turListCloseBtn').addEventListener('click', closeModal);
   modalContent.querySelectorAll('.who-took-list li').forEach((li) => {
     li.addEventListener('click', () => {
-      selectedHatimId = li.getAttribute('data-id');
+      setSelectedHatimId(li.getAttribute('data-id'));
       closeModal();
       render();
     });
@@ -1736,7 +2100,7 @@ function deleteTur(id) {
     await refetchIfPossible();
     state.hatims = (state.hatims || []).filter((x) => x.id !== id);
     if (selectedHatimId === id) {
-      selectedHatimId = state.hatims[0] ? state.hatims[0].id : null;
+      setSelectedHatimId(state.hatims[0] ? state.hatims[0].id : null);
     }
     await saveState();
     render();
@@ -1750,10 +2114,11 @@ function openMainMenu() {
   modalContent.innerHTML =
     '<h2>Menü</h2>' +
     '<button class="btn ' + adminToggleClass + '" id="menuAdminToggle" style="width:100%; margin-bottom:8px;">' + adminToggleLabel + '</button>' +
-    '<button class="btn btn-ghost" id="menuWhoTook" style="width:100%; margin-bottom:8px;">Kim aldı?</button>' +
+    '<button class="btn btn-ghost" id="menuWhoTook" style="width:100%; margin-bottom:8px;">Kim okudu?</button>' +
     '<button class="btn btn-ghost" id="menuLeaderboard" style="width:100%; margin-bottom:8px;">En Çok Katkı Sağlayanlar</button>' +
     '<button class="btn btn-ghost" id="menuChangeName" style="width:100%; margin-bottom:8px;">İsmini Değiştir</button>' +
     '<button class="btn btn-ghost" id="menuShare" style="width:100%; margin-bottom:8px;">WhatsApp\'ta paylaş</button>' +
+    '<button class="btn btn-ghost" id="menuShareImage" style="width:100%; margin-bottom:8px;">📸 Özet Kartı Paylaş</button>' +
     '<button class="btn btn-ghost" id="menuQr" style="width:100%; margin-bottom:8px;">QR kod</button>' +
     '<button class="btn btn-ghost" id="menuTurList" style="width:100%; margin-bottom:8px;">Cevşen Turları</button>' +
     '<button class="btn btn-help" id="menuNewTur" style="width:100%; margin-bottom:8px;">Yeni Tur Ekle</button>' +
@@ -1767,6 +2132,7 @@ function openMainMenu() {
   document.getElementById('menuLeaderboard').addEventListener('click', openLeaderboard);
   document.getElementById('menuChangeName').addEventListener('click', openChangeNameModal);
   document.getElementById('menuShare').addEventListener('click', () => { closeModal(); shareOnWhatsApp(); });
+  document.getElementById('menuShareImage').addEventListener('click', () => { closeModal(); shareProgressImage(); });
   document.getElementById('menuQr').addEventListener('click', openQrModal);
   document.getElementById('menuTurList').addEventListener('click', openTurList);
   document.getElementById('menuNewTur').addEventListener('click', () => requireAdmin(startNewTur));
@@ -1777,8 +2143,8 @@ function openMainMenu() {
 }
 
 menuBtn.addEventListener('click', openMainMenu);
-viewGridBtn.addEventListener('click', () => { viewMode = 'grid'; render(); });
-viewListBtn.addEventListener('click', () => { viewMode = 'list'; render(); });
+viewGridBtn.addEventListener('click', () => { viewMode = 'grid'; try { localStorage.setItem('cevsenViewMode', 'grid'); } catch (e) {} render(); });
+viewListBtn.addEventListener('click', () => { viewMode = 'list'; try { localStorage.setItem('cevsenViewMode', 'list'); } catch (e) {} render(); });
 
 overlay.addEventListener('click', (e) => {
   if (e.target === overlay) closeModal();
