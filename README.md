@@ -49,6 +49,7 @@ sistemini paylaşır ama tamamen ayrı bir Firebase projesi ve veritabanı kulla
 | 2.3 | Telefon ana ekranına uygulama gibi eklenebiliyor (PWA); menüden Hatim Listesi'ne geçiş linki eklendi |
 | 2.4 | Arapça satır aralığı sıkılaştırıldı; bâp değişince sayfa otomatik üste kayıyor; okuma sırasında ekranın kararmasını önleyen "wake lock" eklendi |
 | 2.5 | Özel/şifreli turlar (🔒), ekranın kararmasını önleme (wake lock), "Kim Okudu?" çubuk grafiğe döndü, WhatsApp mesajı kısaltıldı, son açılan tur/görünüm tercihi hatırlanıyor, paylaşılabilir özet kartı görseli eklendi |
+| 3.0 | Gerçek giriş sistemi (Firebase Authentication) eklendi — herkes kendi özel Cevşen turunu oluşturabiliyor, Hesap Bilgilerim ekranı (kendi turlarım, toplam okuduğum, isim/şifre değiştirme); yönetici artık şifreyle değil, giriş yapılan hesabın kimliğiyle belirleniyor; menü sadeleştirildi, her alt ekrana "← Menü" ve "Kapat" butonları eklendi |
 
 ---
 <p align="center"><i>Harmonie31 için sevgiyle hazırlandı 🌙</i></p>
