@@ -616,6 +616,12 @@
     color: var(--white);
   }
 
+  .btn-account {
+    background: #FBF1DC;
+    color: var(--gold);
+    border: 1px solid var(--gold-soft);
+  }
+
   .btn-read {
     background: var(--gold);
     color: var(--white);
@@ -1883,11 +1889,8 @@ function openAccountModal() {
     modalContent.innerHTML =
       '<h2>Hesap Bilgilerim</h2>' +
       '<p class="sub">Hesap bilgilerini görmek, kendi turlarını yönetmek ve isim/şifreni değiştirmek için giriş yapman gerekiyor.</p>' +
-      '<div class="modal-actions">' +
-        '<button class="btn btn-nav" id="acctBackBtn">← Menü</button>' +
-        '<button class="btn btn-primary" id="acctLoginBtn">Giriş Yap</button>' +
-      '</div>' +
-      '<div class="modal-actions" style="margin-top:8px;"><button class="btn btn-nav" id="acctCloseBtn" style="width:100%;">Kapat</button></div>';
+      '<div class="modal-actions"><button class="btn btn-primary" id="acctLoginBtn" style="width:100%;">Giriş Yap</button></div>' +
+      '<div class="modal-actions" style="margin-top:8px;"><button class="btn btn-nav" id="acctBackBtn" style="width:100%;">← Menü</button><button class="btn btn-nav" id="acctCloseBtn" style="width:100%;">Kapat</button></div>';
     document.getElementById('acctBackBtn').addEventListener('click', openMainMenu);
     document.getElementById('acctLoginBtn').addEventListener('click', () => openLoginModal());
     document.getElementById('acctCloseBtn').addEventListener('click', closeModal);
@@ -1918,16 +1921,14 @@ function openAccountModal() {
     '<p class="sub" style="font-weight:600; margin:0 0 8px;">Kendi Turlarım</p>' +
     myTursHtml +
     '<div class="modal-actions">' +
-      '<button class="btn btn-ghost" id="acctChangeNameBtn">İsmini Değiştir</button>' +
-      '<button class="btn btn-ghost" id="acctChangePassBtn">Şifreni Değiştir</button>' +
+      '<button class="btn btn-account" id="acctChangeNameBtn">İsmini Değiştir</button>' +
+      '<button class="btn btn-account" id="acctChangePassBtn">Şifreni Değiştir</button>' +
     '</div>' +
     '<div class="modal-actions" style="margin-top:8px;">' +
       '<button class="btn btn-danger" id="acctLogoutBtn" style="width:100%;">Çıkış Yap</button>' +
     '</div>' +
     '<div class="modal-actions" style="margin-top:8px;">' +
       '<button class="btn btn-nav" id="acctBackBtn" style="width:100%;">← Menü</button>' +
-    '</div>' +
-    '<div class="modal-actions" style="margin-top:8px;">' +
       '<button class="btn btn-nav" id="acctCloseBtn" style="width:100%;">Kapat</button>' +
     '</div>';
   modalContent.querySelectorAll('.who-took-list li').forEach((li) => {
