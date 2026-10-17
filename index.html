@@ -84,6 +84,27 @@
     font-size: 14px;
   }
 
+  .visibility-badge {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .visibility-badge.public {
+    background: #E3EFE9;
+    color: var(--emerald-deep);
+    border: 1px solid var(--emerald);
+  }
+
+  .visibility-badge.private {
+    background: #FBF1DC;
+    color: var(--gold);
+    border: 1px solid var(--gold-soft);
+  }
+
   .info-bar {
     display: flex;
     flex-wrap: wrap;
@@ -280,26 +301,31 @@
 
   .who-took-list li {
     display: flex;
-    justify-content: space-between;
-    align-items: baseline;
+    align-items: center;
     gap: 10px;
-    padding: 8px 0;
+    padding: 10px 0;
     border-bottom: 1px solid var(--line);
-    font-size: 14px;
   }
 
-  .who-took-list li span:first-child {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .who-took-list li .li-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
     min-width: 0;
+    flex: 1;
   }
 
-  .who-took-list li span.count {
+  .who-took-list li .li-text span:first-child {
+    font-size: 16px;
+    white-space: normal;
+    word-break: break-word;
+    overflow: visible;
+    text-overflow: unset;
+  }
+
+  .who-took-list li .li-text span.count {
     color: var(--ink-soft);
-    font-size: 12.5px;
-    flex-shrink: 0;
-    white-space: nowrap;
+    font-size: 13px;
   }
 
   .progress-bar {
@@ -498,7 +524,7 @@
     border-radius: 14px;
     padding: 22px 20px;
     width: 100%;
-    max-width: 320px;
+    max-width: 420px;
     max-height: 85vh;
     overflow-y: auto;
     box-shadow: 0 12px 30px rgba(0,0,0,0.2);
@@ -841,6 +867,7 @@
     <img class="logo" src="logo.png" alt="Harmonie31">
     <p class="kicker">Cevşen Listesi</p>
     <p class="info-editable" id="descriptionText">Boş bir bâba dokunup ismini yaz, senin olsun.</p>
+    <span class="visibility-badge" id="visibilityBadge"></span>
   </header>
 
   <div class="info-bar">
@@ -914,6 +941,7 @@
 // ============================================================
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
 import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, sendEmailVerification } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAy1lehu2PQlVgATudpbtzbv-v8-g0IoJs",
@@ -929,15 +957,27 @@ const firebaseConfig = {
 // service cloud.firestore {
 //   match /databases/{database}/documents {
 //     match /cevsen/{document} { allow read, write: if true; }
+//     match /cevsen_private/{uid} {
+//       allow read, write: if request.auth != null && request.auth.uid == uid;
+//     }
 //   }
 // }
+// Not: /cevsen altındaki genel turlar herkese açık (giriş gerekmez) — eskisi gibi.
+// /cevsen_private/{uid} altındaki özel turlar ise SADECE o kullanıcı kimliğiyle (uid)
+// giriş yapan kişi tarafından okunabilir/yazılabilir — bu gerçek, Firestore tarafından
+// zorlanan bir güvenlik kuralı, sadece arayüzde gizleme değil.
+//
+// Not: Ayrıca Firebase Console → Authentication → Sign-in method'dan
+// "Email/Password" sağlayıcısını etkinleştirmen gerekiyor, yoksa giriş/kayıt çalışmaz.
 
 let db = null;
+let auth = null;
 let firebaseReady = false;
 try {
   if (firebaseConfig.apiKey && firebaseConfig.apiKey.indexOf('BURAYA') === -1) {
     const app = initializeApp(firebaseConfig);
     db = getFirestore(app);
+    auth = getAuth(app);
     firebaseReady = true;
   }
 } catch (e) {
@@ -946,6 +986,10 @@ try {
 
 function stateDocRef() {
   return doc(db, 'cevsen', 'state');
+}
+
+function privateDocRef(uid) {
+  return doc(db, 'cevsen_private', uid);
 }
 
 const TOTAL = 100; // Cevşen-i Şerif 100 bâb'dan oluşur
@@ -968,6 +1012,67 @@ function setSelectedHatimId(id) {
 }
 
 let selectedHatimId = getStoredSelectedHatimId();
+
+// --- Giriş sistemi ve özel turlar ---
+let currentUser = null; // Firebase Auth kullanıcısı, giriş yapılmadıysa null
+let privateState = null; // { hatims: [...] } — SADECE currentUser'ın özel turları
+let privateUnsub = null;
+
+function sanitizePrivateState(raw) {
+  if (!raw || !Array.isArray(raw.hatims)) return { hatims: [] };
+  raw.hatims.forEach((h) => {
+    if (!h.id) h.id = genId();
+    if (typeof h.hatimName !== 'string') h.hatimName = '';
+    if (!Array.isArray(h.cuzler) || h.cuzler.length !== TOTAL) {
+      const old = Array.isArray(h.cuzler) ? h.cuzler : [];
+      const fixed = new Array(TOTAL).fill(null);
+      for (let i = 0; i < Math.min(old.length, TOTAL); i++) fixed[i] = old[i] || null;
+      h.cuzler = fixed;
+    }
+  });
+  return raw;
+}
+
+async function loadPrivateState(uid) {
+  try {
+    const snap = await getDoc(privateDocRef(uid));
+    if (snap.exists()) {
+      privateState = sanitizePrivateState(snap.data());
+    } else {
+      privateState = { hatims: [] };
+      await setDoc(privateDocRef(uid), privateState);
+    }
+  } catch (e) {
+    privateState = { hatims: [] };
+  }
+  try { render(); } catch (e) { /* ilk render henüz hazır değilse sorun değil */ }
+
+  try {
+    privateUnsub = onSnapshot(privateDocRef(uid), (snap) => {
+      if (!snap.exists()) return;
+      if (overlay.classList.contains('open')) return;
+      privateState = sanitizePrivateState(snap.data());
+      try { render(); } catch (e) { /* sonraki güncellemede düzelir */ }
+    });
+  } catch (e) { /* canlı senkronizasyon başlatılamadı, sorun değil */ }
+}
+
+function isTurOwnedPrivate(h) {
+  return !!(h && privateState && privateState.hatims && privateState.hatims.some((x) => x.id === h.id));
+}
+
+if (firebaseReady) {
+  onAuthStateChanged(auth, (user) => {
+    currentUser = user;
+    if (privateUnsub) { privateUnsub(); privateUnsub = null; }
+    if (user) {
+      loadPrivateState(user.uid);
+    } else {
+      privateState = null;
+      try { render(); } catch (e) { /* ilk render henüz hazır değilse sorun değil */ }
+    }
+  });
+}
 
 // Kilidi açtığın turlar 15 dakika boyunca hatırlanır (tarayıcında, localStorage'da) — süre dolunca tekrar şifre sorulur.
 const UNLOCK_MINUTES = 15;
@@ -999,7 +1104,7 @@ function isTurUnlocked(turId) {
 }
 
 function isTurLocked(h) {
-  return !!(h && h.turPassword && !isTurUnlocked(h.id) && !adminMode);
+  return !!(h && h.turPassword && !isTurUnlocked(h.id) && !isAppAdmin());
 }
 let activeIndex = null;
 
@@ -1022,12 +1127,19 @@ const countdownBanner = document.getElementById('countdownBanner');
 const menuBtn = document.getElementById('menuBtn');
 
 let storageOk = true;
-let adminMode = false;
 let viewMode = (function () {
   try { return localStorage.getItem('cevsenViewMode') || 'grid'; } catch (e) { return 'grid'; }
 })();
 let countdownTimer = null;
-const MASTER_PIN = '1001'; // yönetici şifresi — dilersen değiştir
+
+// Yönetici artık bir şifreyle değil, GİRİŞ + bu UID eşleşmesiyle belirleniyor.
+// Kendi UID'ni öğrenmek için: Firebase Console → Authentication → Users → kendi
+// hesabının yanındaki "User UID" değerini kopyala, aşağıya yapıştır.
+const ADMIN_UID = 'JaDoG0pzzvciyg6tfXkGWDDfYLF3';
+
+function isAppAdmin() {
+  return !!(currentUser && currentUser.uid === ADMIN_UID);
+}
 
 function todayStr() {
   const d = new Date();
@@ -1093,6 +1205,9 @@ function getSelectedTur() {
     state.hatims = [freshTur('1. Cevşen')];
   }
   let h = state.hatims.find((x) => x.id === selectedHatimId);
+  if (!h && privateState && privateState.hatims) {
+    h = privateState.hatims.find((x) => x.id === selectedHatimId);
+  }
   if (!h) {
     h = state.hatims[0];
     setSelectedHatimId(h.id);
@@ -1124,6 +1239,7 @@ async function loadState() {
   }
   try {
     render();
+    maybeShowOnboarding();
   } catch (e) {
     progressLabel.textContent = 'Bir hata oluştu: ' + e.message + ' — sayfayı yenile.';
   }
@@ -1142,8 +1258,13 @@ async function loadState() {
 
 async function saveState() {
   if (!storageOk || !firebaseReady) return;
+  const h = getSelectedTur();
   try {
-    await setDoc(stateDocRef(), state);
+    if (h && isTurOwnedPrivate(h) && currentUser) {
+      await setDoc(privateDocRef(currentUser.uid), privateState);
+    } else {
+      await setDoc(stateDocRef(), state);
+    }
   } catch (e) {
     storageOk = false;
     footNote.textContent = 'Değişiklik kaydedilemedi — bağlantı sorunu olabilir, sayfayı yenile.';
@@ -1158,6 +1279,12 @@ async function refetchIfPossible() {
       state = sanitizeState(migrateIfNeeded(snap.data()));
     }
   } catch (e) { /* keep local state if refetch fails */ }
+  if (currentUser) {
+    try {
+      const psnap = await getDoc(privateDocRef(currentUser.uid));
+      if (psnap.exists()) privateState = sanitizePrivateState(psnap.data());
+    } catch (e) { /* keep local privateState if refetch fails */ }
+  }
 }
 
 function hideLoadingScreen() {
@@ -1178,14 +1305,24 @@ function render() {
   const completedCount = cuzler.filter((e) => e && e.completed).length;
   progressFill.style.width = (takenCount / TOTAL * 100) + '%';
   progressLabel.textContent = takenCount + ' / ' + TOTAL + ' bâb alındı, ' + completedCount + ' okundu';
-  footNote.textContent = adminMode
-    ? '🔓 Yönetici modu açık — ismi/tarihleri/açıklamayı değiştirebilir, herhangi bir bâbı boşaltabilirsin.'
-    : (h.turPassword ? '🔒 Bu tur özel — şifreyi bilenler bâbları açabilir.' : 'Bu liste herkese açık — burada kim neyi aldığını görebilir.');
+  const visibilityBadge = document.getElementById('visibilityBadge');
+  if (isTurOwnedPrivate(h)) {
+    visibilityBadge.textContent = '🔒 Bana Özel';
+    visibilityBadge.className = 'visibility-badge private';
+  } else {
+    visibilityBadge.textContent = '🌍 Herkese Açık';
+    visibilityBadge.className = 'visibility-badge public';
+  }
+  footNote.textContent = isTurOwnedPrivate(h)
+    ? 'Bu turu sadece sen görebilir ve yönetebilirsin.'
+    : (isAppAdmin()
+        ? '🔑 Yönetici modu açık — ismi/tarihleri/açıklamayı değiştirebilir, herhangi bir bâbı boşaltabilirsin.'
+        : (h.turPassword ? '🔐 Bu tur şifreli — şifreyi bilenler bâbları açabilir.' : 'Bu liste herkese açık — burada kim neyi aldığını görebilir.'));
   roundValue.textContent = h.hatimName || 'Girilmedi';
   startValue.textContent = h.hatimStart || 'Girilmedi';
   targetDateValue.textContent = h.targetDate || 'Girilmedi';
   descriptionText.textContent = h.description || 'Boş bir bâba dokunup ismini yaz, senin olsun.';
-  menuBtn.textContent = adminMode ? '☰ Menü 🔓' : '☰ Menü';
+  menuBtn.textContent = isAppAdmin() ? '☰ Menü 👑' : '☰ Menü';
   updateCountdown();
 
   gridEl.className = 'grid' + (viewMode === 'list' ? ' list-mode' : '') + (locked ? ' blurred' : '');
@@ -1233,7 +1370,7 @@ function tryUnlockTur(turId) {
   const h = (state.hatims || []).find((x) => x.id === turId);
   if (!h) return;
   const entered = input.value;
-  if (entered === h.turPassword || entered === MASTER_PIN) {
+  if (entered === h.turPassword || isAppAdmin()) {
     unlockTurFor(turId);
     render();
   } else {
@@ -1258,10 +1395,12 @@ function openChangeNameModal() {
     '<p class="sub">Bundan sonra bir bâbı okuduğunu işaretlerken bu isim kullanılacak.</p>' +
     '<input type="text" id="changeNameInput" value="' + escapeHtml(current) + '" maxlength="30" autofocus>' +
     '<div class="modal-actions">' +
-      '<button class="btn btn-ghost" id="changeNameCancelBtn">Vazgeç</button>' +
+      '<button class="btn btn-ghost" id="changeNameCancelBtn">← Geri</button>' +
       '<button class="btn btn-primary" id="changeNameSaveBtn">Kaydet</button>' +
-    '</div>';
-  document.getElementById('changeNameCancelBtn').addEventListener('click', closeModal);
+    '</div>' +
+    '<div class="modal-actions" style="margin-top:8px;"><button class="btn btn-ghost" id="changeNameCloseBtn" style="width:100%;">Kapat</button></div>';
+  document.getElementById('changeNameCancelBtn').addEventListener('click', openAccountModal);
+  document.getElementById('changeNameCloseBtn').addEventListener('click', closeModal);
   const input = document.getElementById('changeNameInput');
   const saveIt = () => {
     const val = input.value.trim();
@@ -1282,6 +1421,7 @@ function openNameModalForRead(index) {
     '<p class="sub">Okuduğunu işaretlemek için önce ismini yaz.</p>' +
     '<input type="text" id="nameInput" placeholder="İsmin" maxlength="30" autofocus>' +
     '<p class="name-hint">İsmin, bu bâbı kimin okuduğunu takip edebilmemiz için kullanılacak — başka hiçbir amaçla kullanılmayacak. Bir dahaki bâpta bir daha sormayacağız.</p>' +
+    (!currentUser ? '<p class="pin-hint" id="suggestSignupBtn" style="margin-top:6px;">💡 İstersen hesap oluşturup kendi Cevşen turunu da oluşturabilirsin →</p>' : '') +
     '<div class="modal-actions">' +
       '<button class="btn btn-ghost" id="cancelBtn">Vazgeç</button>' +
       '<button class="btn btn-primary" id="nameOkBtn" disabled>Devam</button>' +
@@ -1297,6 +1437,8 @@ function openNameModalForRead(index) {
   }
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !okBtn.disabled) confirmName(); });
   document.getElementById('cancelBtn').addEventListener('click', closeModal);
+  const suggestSignupBtn = document.getElementById('suggestSignupBtn');
+  if (suggestSignupBtn) suggestSignupBtn.addEventListener('click', () => openSignupModal());
   okBtn.addEventListener('click', confirmName);
   overlay.classList.add('open');
   setTimeout(() => input.focus(), 50);
@@ -1525,7 +1667,7 @@ async function saveRound() {
   closeModal();
 }
 
-roundItem.addEventListener('click', () => requireAdmin(openRoundEditor));
+roundItem.addEventListener('click', () => requireManage(openRoundEditor));
 
 function toDateInputValue(str) {
   if (!str) return '';
@@ -1569,9 +1711,9 @@ async function saveDate(fieldKey) {
   closeModal();
 }
 
-startItem.addEventListener('click', () => requireAdmin(() => openDateEditor('hatimStart', 'Açılma Tarihi')));
-targetDateItem.addEventListener('click', () => requireAdmin(() => openDateEditor('targetDate', 'Son Okuma Tarihi')));
-descriptionText.addEventListener('click', () => requireAdmin(openDescriptionEditor));
+startItem.addEventListener('click', () => requireManage(() => openDateEditor('hatimStart', 'Açılma Tarihi')));
+targetDateItem.addEventListener('click', () => requireManage(() => openDateEditor('targetDate', 'Son Okuma Tarihi')));
+descriptionText.addEventListener('click', () => requireManage(openDescriptionEditor));
 
 function openDescriptionEditor() {
   const h = getSelectedTur();
@@ -1602,40 +1744,220 @@ async function saveDescription() {
   closeModal();
 }
 
-function openAdminModeModal() {
-  modalContent.innerHTML =
-    '<h2>Yönetici Modu</h2>' +
-    '<p class="sub">Yönetici şifresini gir. Açıldığında ismi/tarihleri/açıklamayı değiştirebilir, bâbları boşaltabilirsin.</p>' +
-    '<input type="tel" id="adminPinInput" placeholder="Şifre" maxlength="4" inputmode="numeric" pattern="[0-9]*" autofocus>' +
-    '<div class="modal-actions">' +
-      '<button class="btn btn-ghost" id="adminPinCancelBtn">Vazgeç</button>' +
-      '<button class="btn btn-primary" id="adminPinSaveBtn">Aç</button>' +
-    '</div>';
-  const input = document.getElementById('adminPinInput');
-  input.addEventListener('input', () => { input.value = input.value.replace(/[^0-9]/g, '').slice(0, 4); });
-  document.getElementById('adminPinCancelBtn').addEventListener('click', closeModal);
-  document.getElementById('adminPinSaveBtn').addEventListener('click', () => {
-    const val = input.value.trim();
-    if (val !== MASTER_PIN) { showMessage('Şifre yanlış.'); return; }
-    adminMode = true;
-    closeModal();
-    render();
-    showMessage('Yönetici modu açık.');
-  });
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('adminPinSaveBtn').click(); });
-  overlay.classList.add('open');
-  setTimeout(() => input.focus(), 50);
-}
-
-function disableAdminMode() {
-  adminMode = false;
-  closeModal();
-  render();
-}
-
 function requireAdmin(action) {
-  if (adminMode) { action(); return; }
-  showMessage('Bu işlem için Yönetici Modunu açman gerekiyor — Menü → Yönetici Modunu Aç.');
+  if (isAppAdmin()) { action(); return; }
+  if (currentUser) {
+    showMessage('Bu işlem için yönetici hesabıyla giriş yapmış olman gerekiyor.');
+  } else {
+    openLoginModal(() => requireAdmin(action), 'Bu işlem için yönetici hesabınla giriş yap.');
+  }
+}
+
+// Özel (giriş gerektiren) turlar sadece sahibi tarafından yönetilebilir.
+// Genel turlar yönetici hesabıyla (giriş + UID eşleşmesi) yönetilir.
+function requireManage(action) {
+  const h = getSelectedTur();
+  if (!h) return;
+  if (isTurOwnedPrivate(h)) {
+    if (currentUser) { action(); } else { showMessage('Bu özel turu yönetmek için giriş yapman gerekiyor.'); }
+  } else {
+    requireAdmin(action);
+  }
+}
+
+function authErrorText(e) {
+  const code = (e && e.code) || '';
+  if (code.indexOf('email-already-in-use') !== -1) return 'Bu e-posta zaten kayıtlı.';
+  if (code.indexOf('invalid-email') !== -1) return 'Geçersiz e-posta adresi.';
+  if (code.indexOf('weak-password') !== -1) return 'Şifre çok zayıf — en az 6 karakter olmalı.';
+  if (code.indexOf('wrong-password') !== -1 || code.indexOf('invalid-credential') !== -1) return 'E-posta veya şifre yanlış.';
+  if (code.indexOf('user-not-found') !== -1) return 'Bu e-posta ile kayıtlı hesap yok.';
+  if (code.indexOf('too-many-requests') !== -1) return 'Çok fazla deneme yapıldı, biraz sonra tekrar dene.';
+  return 'Bir hata oluştu, tekrar dener misin?';
+}
+
+function openLoginModal(onSuccess, note) {
+  modalContent.innerHTML =
+    '<div style="background:#E3EFE9; border:1px solid var(--emerald); color:var(--emerald-deep); padding:7px 12px; border-radius:8px; font-weight:600; font-size:12.5px; margin-bottom:14px; text-align:center;">🔑 Giriş Yapma Ekranı</div>' +
+    '<h2>Giriş Yap</h2>' +
+    '<p class="sub">' + escapeHtml(note || 'E-posta ve şifrenle giriş yap.') + '</p>' +
+    '<form id="loginForm">' +
+      '<input type="email" id="authEmailInput" name="email" placeholder="E-posta" autocomplete="username" required>' +
+      '<input type="password" id="authPassInput" name="password" placeholder="Şifre" autocomplete="current-password" required>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn-ghost" id="authCancelBtn">Vazgeç</button>' +
+        '<button type="submit" class="btn btn-primary" id="authLoginBtn">Giriş Yap</button>' +
+      '</div>' +
+    '</form>' +
+    '<p class="pin-hint" id="authSignupLink" style="text-align:center; margin-top:10px;">Hesabın yok mu? Kayıt ol →</p>';
+  document.getElementById('authCancelBtn').addEventListener('click', closeModal);
+  document.getElementById('loginForm').addEventListener('submit', (e) => { e.preventDefault(); doLogin(onSuccess); });
+  document.getElementById('authSignupLink').addEventListener('click', () => openSignupModal(onSuccess, note));
+  overlay.classList.add('open');
+  setTimeout(() => document.getElementById('authEmailInput').focus(), 50);
+}
+
+async function doLogin(onSuccess) {
+  const email = document.getElementById('authEmailInput').value.trim();
+  const pass = document.getElementById('authPassInput').value;
+  if (!email || !pass) { showMessage('E-posta ve şifre gerekli.'); return; }
+  try {
+    await signInWithEmailAndPassword(auth, email, pass);
+    closeModal();
+    if (onSuccess) { setTimeout(onSuccess, 300); } else { showMessage('Hoş geldin, ' + (getStoredName() || email) + '! 👋'); }
+  } catch (e) {
+    showMessage('Giriş başarısız: ' + authErrorText(e));
+  }
+}
+
+function openSignupModal(onSuccess, note) {
+  modalContent.innerHTML =
+    '<div style="background:#FBF1DC; border:1px solid var(--gold-soft); color:var(--gold); padding:7px 12px; border-radius:8px; font-weight:600; font-size:12.5px; margin-bottom:14px; text-align:center;">✍️ Hesap Oluşturma Ekranı</div>' +
+    '<h2>Kayıt Ol</h2>' +
+    '<p class="sub">' + escapeHtml(note || 'Yeni bir hesap oluştur.') + '</p>' +
+    '<form id="signupForm">' +
+      '<input type="text" id="authNameInput" name="name" placeholder="İsmin" autocomplete="name" required>' +
+      '<p class="pin-hint" style="text-align:left; margin-top:-6px; cursor:default; text-decoration:none;">Bu isim, bâb okurken kullanacağın isim olacak.</p>' +
+      '<input type="email" id="authEmailInput" name="email" placeholder="E-posta" autocomplete="username" required>' +
+      '<input type="password" id="authPassInput" name="new-password" placeholder="Şifre (en az 6 karakter)" autocomplete="new-password" required>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn-ghost" id="authCancelBtn">Vazgeç</button>' +
+        '<button type="submit" class="btn btn-primary" id="authSignupBtn">Kayıt Ol</button>' +
+      '</div>' +
+    '</form>' +
+    '<p class="pin-hint" id="authLoginLink" style="text-align:center; margin-top:10px;">Zaten hesabın var mı? Giriş yap →</p>';
+  document.getElementById('authCancelBtn').addEventListener('click', closeModal);
+  document.getElementById('signupForm').addEventListener('submit', (e) => { e.preventDefault(); doSignup(onSuccess); });
+  document.getElementById('authLoginLink').addEventListener('click', () => openLoginModal(onSuccess, note));
+  overlay.classList.add('open');
+  setTimeout(() => document.getElementById('authNameInput').focus(), 50);
+}
+
+async function doSignup(onSuccess) {
+  const name = document.getElementById('authNameInput').value.trim();
+  const email = document.getElementById('authEmailInput').value.trim();
+  const pass = document.getElementById('authPassInput').value;
+  if (!name) { showMessage('İsmini yaz.'); return; }
+  if (!email || !pass) { showMessage('E-posta ve şifre gerekli.'); return; }
+  if (pass.length < 6) { showMessage('Şifre en az 6 karakter olmalı.'); return; }
+  try {
+    const cred = await createUserWithEmailAndPassword(auth, email, pass);
+    setStoredName(name);
+    try { await sendEmailVerification(cred.user); } catch (e) { /* doğrulama maili gitmese de hesap/giriş zaten çalışır */ }
+    closeModal();
+    if (onSuccess) { setTimeout(onSuccess, 300); } else { showMessage('Hesap oluşturuldu, giriş yapıldı. E-postana bir doğrulama maili gönderdik (dilersen doğrulayabilirsin, zorunlu değil).'); }
+  } catch (e) {
+    showMessage('Kayıt başarısız: ' + authErrorText(e));
+  }
+}
+
+function doLogout() {
+  showConfirm('Çıkış yapmak istediğine emin misin?', () => {
+    signOut(auth);
+    showMessage('Çıkış yapıldı — görüşmek üzere! 👋');
+  });
+}
+
+function openAccountModal() {
+  if (!currentUser) {
+    modalContent.innerHTML =
+      '<h2>Hesap Bilgilerim</h2>' +
+      '<p class="sub">Hesap bilgilerini görmek, kendi turlarını yönetmek ve isim/şifreni değiştirmek için giriş yapman gerekiyor.</p>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" id="acctBackBtn">← Menü</button>' +
+        '<button class="btn btn-primary" id="acctLoginBtn">Giriş Yap</button>' +
+      '</div>' +
+      '<div class="modal-actions" style="margin-top:8px;"><button class="btn btn-ghost" id="acctCloseBtn" style="width:100%;">Kapat</button></div>';
+    document.getElementById('acctBackBtn').addEventListener('click', openMainMenu);
+    document.getElementById('acctLoginBtn').addEventListener('click', () => openLoginModal());
+    document.getElementById('acctCloseBtn').addEventListener('click', closeModal);
+    overlay.classList.add('open');
+    return;
+  }
+
+  const myName = getStoredName();
+  let totalCompleted = 0;
+  (state.hatims || []).forEach((h) => (h.cuzler || []).forEach((e) => { if (e && e.completed && myName && e.name === myName) totalCompleted++; }));
+  (privateState && privateState.hatims ? privateState.hatims : []).forEach((h) => (h.cuzler || []).forEach((e) => { if (e && e.completed && myName && e.name === myName) totalCompleted++; }));
+
+  const myTurs = (privateState && privateState.hatims) || [];
+  const myTursHtml = myTurs.length === 0
+    ? '<p class="sub" style="margin:0 0 14px;">Henüz özel bir turun yok.</p>'
+    : '<ul class="who-took-list" style="max-height:150px; margin-bottom:14px;">' +
+        myTurs.map((h) => {
+          const completed = h.cuzler.filter((e) => e && e.completed).length;
+          return '<li style="cursor:pointer;" data-id="' + h.id + '"><span class="li-text"><span>🔒 ' + escapeHtml(h.hatimName || 'Cevşen') + '</span><span class="count">' + completed + ' / ' + TOTAL + '</span></span></li>';
+        }).join('') +
+      '</ul>';
+
+  modalContent.innerHTML =
+    '<h2>Hesap Bilgilerim</h2>' +
+    '<div class="taken-info">' + escapeHtml(currentUser.email) + (isAppAdmin() ? ' <span style="color:var(--gold); font-weight:600;">· 👑 Yönetici</span>' : '') + '</div>' +
+    '<p class="sub" style="font-weight:600; margin:14px 0 2px;">Toplam Okuduğum</p>' +
+    '<p class="sub" style="margin:0 0 14px;">' + totalCompleted + ' bâb</p>' +
+    '<p class="sub" style="font-weight:600; margin:0 0 8px;">Kendi Turlarım</p>' +
+    myTursHtml +
+    '<div class="modal-actions">' +
+      '<button class="btn btn-ghost" id="acctChangeNameBtn">İsmini Değiştir</button>' +
+      '<button class="btn btn-ghost" id="acctChangePassBtn">Şifreni Değiştir</button>' +
+    '</div>' +
+    '<div class="modal-actions" style="margin-top:8px;">' +
+      '<button class="btn btn-danger" id="acctLogoutBtn" style="width:100%;">Çıkış Yap</button>' +
+    '</div>' +
+    '<div class="modal-actions" style="margin-top:8px;">' +
+      '<button class="btn btn-ghost" id="acctBackBtn" style="width:100%;">← Menü</button>' +
+    '</div>' +
+    '<div class="modal-actions" style="margin-top:8px;">' +
+      '<button class="btn btn-ghost" id="acctCloseBtn" style="width:100%;">Kapat</button>' +
+    '</div>';
+  modalContent.querySelectorAll('.who-took-list li').forEach((li) => {
+    li.addEventListener('click', () => {
+      setSelectedHatimId(li.getAttribute('data-id'));
+      closeModal();
+      render();
+    });
+  });
+  document.getElementById('acctChangeNameBtn').addEventListener('click', openChangeNameModal);
+  document.getElementById('acctChangePassBtn').addEventListener('click', openChangePasswordModal);
+  document.getElementById('acctLogoutBtn').addEventListener('click', doLogout);
+  document.getElementById('acctBackBtn').addEventListener('click', openMainMenu);
+  document.getElementById('acctCloseBtn').addEventListener('click', closeModal);
+  overlay.classList.add('open');
+}
+
+function openChangePasswordModal() {
+  modalContent.innerHTML =
+    '<h2>Şifreni Değiştir</h2>' +
+    '<p class="sub">Yeni şifreni yaz (en az 6 karakter).</p>' +
+    '<input type="password" id="newPassInput" placeholder="Yeni şifre" autocomplete="new-password" autofocus>' +
+    '<div class="modal-actions">' +
+      '<button class="btn btn-ghost" id="passCancelBtn">← Geri</button>' +
+      '<button class="btn btn-primary" id="passSaveBtn">Kaydet</button>' +
+    '</div>' +
+    '<div class="modal-actions" style="margin-top:8px;"><button class="btn btn-ghost" id="passCloseBtn" style="width:100%;">Kapat</button></div>';
+  document.getElementById('passCancelBtn').addEventListener('click', openAccountModal);
+  document.getElementById('passCloseBtn').addEventListener('click', closeModal);
+  document.getElementById('passSaveBtn').addEventListener('click', doChangePassword);
+  const inp = document.getElementById('newPassInput');
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') doChangePassword(); });
+  overlay.classList.add('open');
+  setTimeout(() => inp.focus(), 50);
+}
+
+async function doChangePassword() {
+  const newPass = document.getElementById('newPassInput').value;
+  if (!newPass || newPass.length < 6) { showMessage('Yeni şifre en az 6 karakter olmalı.'); return; }
+  try {
+    await updatePassword(currentUser, newPass);
+    closeModal();
+    showMessage('Şifren güncellendi.');
+  } catch (e) {
+    if (((e && e.code) || '').indexOf('requires-recent-login') !== -1) {
+      showMessage('Güvenlik nedeniyle önce çıkış yapıp tekrar giriş yapman, sonra şifreni değiştirmen gerekiyor.');
+    } else {
+      showMessage('Şifre değiştirilemedi: ' + authErrorText(e));
+    }
+  }
 }
 
 function parseDDMMYYYY(str) {
@@ -1679,65 +2001,108 @@ function renderCountdownNow() {
   countdownBanner.className = totalMinutes <= 3 * 24 * 60 ? 'countdown-banner soon' : 'countdown-banner';
 }
 
-function openWhoTook() {
-  const h = getSelectedTur();
-  if (isTurLocked(h)) { showMessage('Bu tur özel — önce kilidi açman gerekiyor.'); return; }
-  const counts = {};
-  h.cuzler.forEach((entry) => {
-    if (!entry) return;
-    if (!counts[entry.name]) counts[entry.name] = { total: 0, completed: 0 };
-    counts[entry.name].total++;
-    if (entry.completed) counts[entry.name].completed++;
-  });
-  const names = Object.keys(counts).sort((a, b) => counts[b].completed - counts[a].completed || a.localeCompare(b));
-  let listHtml;
-  if (names.length === 0) {
-    listHtml = '<p class="sub">Henüz kimse bâb almadı.</p>';
-  } else {
-    listHtml = '<ul class="who-bar-list">' +
-      names.map((n) => {
-        const pct = Math.round((counts[n].completed / TOTAL) * 100);
-        return '<li class="who-bar-row">' +
-          '<div class="who-bar-label"><span>' + escapeHtml(n) + '</span><span class="who-bar-count">' + counts[n].completed + ' / ' + TOTAL + '</span></div>' +
-          '<div class="who-bar-track"><div class="who-bar-fill" style="width:' + pct + '%;"></div></div>' +
-          '</li>';
-      }).join('') +
-      '</ul>';
-  }
+function openShareModal() {
   modalContent.innerHTML =
-    '<h2>Kim Okudu?</h2>' + listHtml +
-    '<div class="modal-actions"><button class="btn btn-primary" id="whoTookCloseBtn">Kapat</button></div>';
-  document.getElementById('whoTookCloseBtn').addEventListener('click', closeModal);
+    '<h2>Paylaş</h2>' +
+    '<p class="sub">Bu turu nasıl paylaşmak istersin?</p>' +
+    '<button class="btn btn-ghost" id="shareWaBtn" style="width:100%; margin-bottom:8px;">WhatsApp\'ta paylaş (metin)</button>' +
+    '<button class="btn btn-ghost" id="shareImgBtn" style="width:100%; margin-bottom:8px;">📸 Özet Kartı Paylaş (görsel)</button>' +
+    '<button class="btn btn-ghost" id="shareQrBtn" style="width:100%; margin-bottom:12px;">QR kod göster</button>' +
+    '<div class="modal-actions"><button class="btn btn-ghost" id="shareBackBtn" style="width:100%;">← Menü</button><button class="btn btn-ghost" id="shareCloseBtn" style="width:100%;">Kapat</button></div>';
+  document.getElementById('shareWaBtn').addEventListener('click', () => { closeModal(); shareOnWhatsApp(); });
+  document.getElementById('shareImgBtn').addEventListener('click', () => { closeModal(); shareProgressImage(); });
+  document.getElementById('shareQrBtn').addEventListener('click', openQrModal);
+  document.getElementById('shareBackBtn').addEventListener('click', openMainMenu);
+  document.getElementById('shareCloseBtn').addEventListener('click', closeModal);
   overlay.classList.add('open');
 }
 
-function openLeaderboard() {
-  const counts = {};
-  (state.hatims || []).forEach((h) => {
-    if (isTurLocked(h)) return; // özel ve kilitli turların isimleri sızmasın
+function openStatsModal() {
+  const h = getSelectedTur();
+
+  // Bu turda kim ne kadar okumuş (bar grafik)
+  let perTurHtml = '<p class="sub">Bu tur özel veya kilitli — önce açman gerekiyor.</p>';
+  if (!isTurLocked(h)) {
+    const perTurCounts = {};
     (h.cuzler || []).forEach((entry) => {
       if (!entry) return;
-      if (!counts[entry.name]) counts[entry.name] = { total: 0, completed: 0 };
-      counts[entry.name].total++;
-      if (entry.completed) counts[entry.name].completed++;
+      if (!perTurCounts[entry.name]) perTurCounts[entry.name] = { completed: 0 };
+      if (entry.completed) perTurCounts[entry.name].completed++;
+    });
+    const perTurNames = Object.keys(perTurCounts).sort((a, b) => perTurCounts[b].completed - perTurCounts[a].completed || a.localeCompare(b));
+    perTurHtml = perTurNames.length === 0
+      ? '<p class="sub" style="margin:0;">Henüz kimse bâb almadı.</p>'
+      : '<ul class="who-bar-list" style="margin-bottom:0;">' +
+          perTurNames.map((n) => {
+            const pct = Math.round((perTurCounts[n].completed / TOTAL) * 100);
+            return '<li class="who-bar-row">' +
+              '<div class="who-bar-label"><span>' + escapeHtml(n) + '</span><span class="who-bar-count">' + perTurCounts[n].completed + ' / ' + TOTAL + '</span></div>' +
+              '<div class="who-bar-track"><div class="who-bar-fill" style="width:' + pct + '%;"></div></div>' +
+              '</li>';
+          }).join('') +
+        '</ul>';
+  }
+
+  // Tüm turlar boyunca en çok katkı sağlayanlar
+  const allCounts = {};
+  (state.hatims || []).forEach((hh) => {
+    if (isTurLocked(hh)) return;
+    (hh.cuzler || []).forEach((entry) => {
+      if (!entry) return;
+      if (!allCounts[entry.name]) allCounts[entry.name] = { total: 0, completed: 0 };
+      allCounts[entry.name].total++;
+      if (entry.completed) allCounts[entry.name].completed++;
     });
   });
-  const names = Object.keys(counts).sort((a, b) => counts[b].completed - counts[a].completed || counts[b].total - counts[a].total || a.localeCompare(b));
-  let listHtml;
-  if (names.length === 0) {
-    listHtml = '<p class="sub">Henüz hiç veri yok.</p>';
-  } else {
-    const medals = ['🥇', '🥈', '🥉'];
-    listHtml = '<ul class="who-took-list">' +
-      names.map((n, i) => '<li><span>' + (medals[i] || (i + 1) + '.') + ' ' + escapeHtml(n) + '</span><span class="count">' + counts[n].completed + ' / ' + counts[n].total + ' okundu</span></li>').join('') +
+  const allNames = Object.keys(allCounts).sort((a, b) => allCounts[b].completed - allCounts[a].completed || a.localeCompare(b));
+  const medals = ['🥇', '🥈', '🥉'];
+  const leaderboardHtml = allNames.length === 0
+    ? '<p class="sub" style="margin:0;">Henüz hiç veri yok.</p>'
+    : '<ul class="who-took-list" style="margin-bottom:0;">' +
+        allNames.map((n, i) => '<li><span class="li-text"><span>' + (medals[i] || (i + 1) + '.') + ' ' + escapeHtml(n) + '</span><span class="count">' + allCounts[n].completed + ' / ' + allCounts[n].total + ' okundu</span></span></li>').join('') +
       '</ul>';
-  }
+
   modalContent.innerHTML =
-    '<h2>En Çok Katkı Sağlayanlar</h2>' +
-    '<p class="sub">Tüm turlar boyunca, kim kaç bâb okumuş.</p>' +
-    listHtml +
-    '<div class="modal-actions"><button class="btn btn-primary" id="leaderboardCloseBtn">Kapat</button></div>';
-  document.getElementById('leaderboardCloseBtn').addEventListener('click', closeModal);
+    '<h2>İstatistikler</h2>' +
+    '<p class="sub" style="font-weight:600; margin:0 0 8px;">Bu Turda Kim Okudu?</p>' +
+    perTurHtml +
+    '<p class="sub" style="font-weight:600; margin:16px 0 8px;">Tüm Turlarda En Çok Katkı Sağlayanlar</p>' +
+    leaderboardHtml +
+    '<div class="modal-actions" style="margin-top:14px;"><button class="btn btn-ghost" id="statsBackBtn" style="width:100%;">← Menü</button><button class="btn btn-ghost" id="statsCloseBtn" style="width:100%;">Kapat</button></div>';
+  document.getElementById('statsBackBtn').addEventListener('click', openMainMenu);
+  document.getElementById('statsCloseBtn').addEventListener('click', closeModal);
+  overlay.classList.add('open');
+}
+
+function openNewTurChoiceModal() {
+  modalContent.innerHTML =
+    '<h2>Yeni Tur Oluştur</h2>' +
+    '<p class="sub">Herkese açık mı olsun, yoksa sadece sana mı özel olsun?</p>' +
+    '<button class="btn btn-ghost" id="choicePublicBtn" style="width:100%; margin-bottom:8px;">🌍 Genel (herkese açık)</button>' +
+    '<button class="btn btn-help" id="choicePrivateBtn" style="width:100%; margin-bottom:12px;">🔒 Özel (sadece bana)</button>' +
+    '<div class="modal-actions"><button class="btn btn-ghost" id="choiceBackBtn" style="width:100%;">← Menü</button><button class="btn btn-ghost" id="choiceCancelBtn" style="width:100%;">Kapat</button></div>';
+  document.getElementById('choiceBackBtn').addEventListener('click', openMainMenu);
+  document.getElementById('choiceCancelBtn').addEventListener('click', closeModal);
+  document.getElementById('choicePublicBtn').addEventListener('click', () => { closeModal(); openPublicTurCreateModal(); });
+  document.getElementById('choicePrivateBtn').addEventListener('click', () => { closeModal(); quickCreatePrivateTur(); });
+  overlay.classList.add('open');
+}
+
+function openManageTurModal() {
+  const h = getSelectedTur();
+  const canReset = isAppAdmin() || isTurOwnedPrivate(h);
+  modalContent.innerHTML =
+    '<h2>Bu Turu Yönet</h2>' +
+    '<p class="sub">"' + escapeHtml(h ? (h.hatimName || 'Cevşen') : 'Cevşen') + '" için:</p>' +
+    (isAppAdmin() ? '<button class="btn btn-ghost" id="manageSetPassBtn" style="width:100%; margin-bottom:8px;">🔐 Bu Turu Şifrele</button>' : '') +
+    (canReset ? '<button class="btn btn-danger" id="manageResetBtn" style="width:100%; margin-bottom:8px;">Bu Turu Sıfırla</button>' : '') +
+    '<div class="modal-actions"><button class="btn btn-ghost" id="manageBackBtn" style="width:100%;">← Menü</button><button class="btn btn-ghost" id="manageCloseBtn" style="width:100%;">Kapat</button></div>';
+  document.getElementById('manageBackBtn').addEventListener('click', openMainMenu);
+  document.getElementById('manageCloseBtn').addEventListener('click', closeModal);
+  const setPassBtn = document.getElementById('manageSetPassBtn');
+  if (setPassBtn) setPassBtn.addEventListener('click', () => { closeModal(); requireAdmin(openSetTurPasswordModal); });
+  const resetBtn = document.getElementById('manageResetBtn');
+  if (resetBtn) resetBtn.addEventListener('click', () => { closeModal(); requireManage(resetAll); });
   overlay.classList.add('open');
 }
 
@@ -1748,7 +2113,8 @@ function openQrModal() {
     '<h2>QR Kod</h2>' +
     '<p class="sub">Bu kodu okutan direkt listeye gelir.</p>' +
     '<div style="text-align:center; margin-bottom:14px;"><img src="' + qrImgUrl + '" alt="QR kod" style="width:220px; height:220px; border:1px solid var(--line); border-radius:8px; background:var(--white);"></div>' +
-    '<div class="modal-actions"><button class="btn btn-primary" id="qrCloseBtn">Kapat</button></div>';
+    '<div class="modal-actions"><button class="btn btn-ghost" id="qrBackBtn">← Paylaş</button><button class="btn btn-ghost" id="qrCloseBtn">Kapat</button></div>';
+  document.getElementById('qrBackBtn').addEventListener('click', openShareModal);
   document.getElementById('qrCloseBtn').addEventListener('click', closeModal);
   overlay.classList.add('open');
 }
@@ -2001,67 +2367,140 @@ function resetAll() {
   });
 }
 
-function startNewTur() {
-  showConfirm('Yeni bir Cevşen turu oluşturulacak ve ekrana o gelecek. Mevcut tur silinmez, listede kalır. Emin misin?', async () => {
-    await refetchIfPossible();
-    if (!state.hatims) state.hatims = [];
-    const newTur = freshTur('');
-    state.hatims.unshift(newTur);
-    setSelectedHatimId(newTur.id);
-    await saveState();
-    render();
-    openNewTurSetupModal(newTur.id);
-  });
+function maybeShowOnboarding() {
+  try {
+    if (localStorage.getItem('cevsenOnboardingSeen')) return;
+  } catch (e) { return; }
+  showOnboardingModal();
 }
 
-function openNewTurSetupModal(turId) {
+function dismissOnboarding() {
+  try { localStorage.setItem('cevsenOnboardingSeen', '1'); } catch (e) { /* sorun değil */ }
+  closeModal();
+}
+
+function showOnboardingModal() {
+  const h = getSelectedTur();
   modalContent.innerHTML =
-    '<h2>Yeni Tur</h2>' +
-    '<p class="sub">Bu tura bir isim ver. İstersen özel yapmak için bir şifre de belirleyebilirsin (opsiyonel) — o zaman bu turun bâblarını sadece şifreyi bilenler açıp okuyabilir, listede 🔒 ile görünür.</p>' +
-    '<input type="text" id="newTurNameInput" placeholder="Tur adı" maxlength="40" autofocus>' +
-    '<input type="password" id="newTurPassInput" placeholder="Şifre (opsiyonel)" maxlength="30" autocomplete="off">' +
-    '<div class="modal-actions">' +
-      '<button class="btn btn-ghost" id="newTurCancelBtn">Vazgeç</button>' +
-      '<button class="btn btn-primary" id="newTurSaveBtn">Kaydet</button>' +
+    '<h2>Hoş geldin! 👋</h2>' +
+    '<p class="sub">Artık kendi Cevşen turunu da oluşturabilirsin — istersen herkese açık, istersen sadece sana özel.</p>' +
+    '<p class="sub">Şu an ekranda gördüklerin <strong>"' + escapeHtml(h ? (h.hatimName || 'Cevşen') : 'Cevşen') + '"</strong> adlı, herkese açık (genel) bâblar.</p>' +
+    '<p class="sub" style="margin-bottom:0;">Dilediğin zaman <strong>☰ Menü → Cevşen Turları</strong>\'ndan başka bir tura geçebilirsin.</p>' +
+    '<div class="modal-actions" style="margin-top:14px;">' +
+      '<button class="btn btn-ghost" id="onboardDismissBtn">Anladım, bu şekilde devam et</button>' +
+      '<button class="btn btn-primary" id="onboardCreateBtn">🔒 Kendi Turumu Oluştur</button>' +
     '</div>';
-  document.getElementById('newTurCancelBtn').addEventListener('click', closeModal);
-  const nameInput = document.getElementById('newTurNameInput');
-  const saveIt = async () => {
-    const nameVal = nameInput.value.trim();
-    const passVal = document.getElementById('newTurPassInput').value.trim();
-    if (!nameVal) { showMessage('Bir tur adı yaz.'); return; }
-    await refetchIfPossible();
-    const hh = (state.hatims || []).find((x) => x.id === turId);
-    if (!hh) { closeModal(); return; }
-    hh.hatimName = nameVal;
-    hh.turPassword = passVal || null;
-    if (passVal) unlockTurFor(turId);
-    await saveState();
-    render();
-    closeModal();
-  };
-  document.getElementById('newTurSaveBtn').addEventListener('click', saveIt);
-  nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveIt(); });
+  document.getElementById('onboardDismissBtn').addEventListener('click', dismissOnboarding);
+  document.getElementById('onboardCreateBtn').addEventListener('click', () => {
+    dismissOnboarding();
+    quickCreatePrivateTur();
+  });
+  overlay.classList.add('open');
+}
+
+function openPublicTurCreateModal() {
+  modalContent.innerHTML =
+    '<h2>Yeni Genel Tur</h2>' +
+    '<p class="sub">Bu tur herkese açık olacak — adını yaz ve yayınla. Mevcut turlar silinmez, listede kalır.</p>' +
+    '<input type="text" id="newPublicTurNameInput" placeholder="Tur adı" maxlength="40" autofocus>' +
+    '<div class="modal-actions">' +
+      '<button class="btn btn-ghost" id="newPublicTurCancelBtn">Vazgeç</button>' +
+      '<button class="btn btn-primary" id="newPublicTurPublishBtn">Yayınla</button>' +
+    '</div>';
+  document.getElementById('newPublicTurCancelBtn').addEventListener('click', closeModal);
+  const nameInput = document.getElementById('newPublicTurNameInput');
+  const publishIt = () => startNewPublicTur(nameInput.value.trim());
+  document.getElementById('newPublicTurPublishBtn').addEventListener('click', publishIt);
+  nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') publishIt(); });
   overlay.classList.add('open');
   setTimeout(() => nameInput.focus(), 50);
 }
 
+async function startNewPublicTur(name) {
+  await refetchIfPossible();
+  if (!state.hatims) state.hatims = [];
+  const newTur = freshTur(name || '');
+  state.hatims.unshift(newTur);
+  setSelectedHatimId(newTur.id);
+  await saveState();
+  render();
+  closeModal();
+  showMessage('"' + (newTur.hatimName || 'Cevşen') + '" yayınlandı — artık herkes görebilir.');
+}
+
+async function startNewPrivateTur() {
+  if (!currentUser) return;
+  await refetchIfPossible();
+  if (!privateState) privateState = { hatims: [] };
+  const newTur = freshTur('');
+  privateState.hatims.unshift(newTur);
+  setSelectedHatimId(newTur.id);
+  await setDoc(privateDocRef(currentUser.uid), privateState);
+  render();
+  showMessage('Özel turun oluşturuldu — bunu sadece sen görebilirsin.');
+  openRoundEditor();
+}
+
+function quickCreatePrivateTur() {
+  if (currentUser) {
+    startNewPrivateTur();
+  } else {
+    openLoginModal(startNewPrivateTur, 'Kendi özel Cevşen turunu oluşturmak için önce giriş yap.');
+  }
+}
+
+function openSetTurPasswordModal() {
+  const h = getSelectedTur();
+  if (!h) return;
+  modalContent.innerHTML =
+    '<h2>Turu Şifrele</h2>' +
+    '<p class="sub">"' + escapeHtml(h.hatimName || 'Bu tur') + '" için bir şifre belirle — o zaman bâblarını sadece şifreyi bilenler açabilir, listede 🔐 ile görünür. Boş bırakırsan şifre kaldırılır.</p>' +
+    '<input type="password" id="turPassInput" placeholder="Şifre (boş = şifresiz)" maxlength="30" autocomplete="off" value="' + escapeHtml(h.turPassword || '') + '" autofocus>' +
+    '<div class="modal-actions">' +
+      '<button class="btn btn-ghost" id="turPassCancelBtn">Vazgeç</button>' +
+      '<button class="btn btn-primary" id="turPassSaveBtn">Kaydet</button>' +
+    '</div>';
+  document.getElementById('turPassCancelBtn').addEventListener('click', closeModal);
+  const passInput = document.getElementById('turPassInput');
+  const saveIt = async () => {
+    const passVal = passInput.value.trim();
+    await refetchIfPossible();
+    const hh = getSelectedTur();
+    if (!hh) { closeModal(); return; }
+    hh.turPassword = passVal || null;
+    if (passVal) unlockTurFor(hh.id);
+    await saveState();
+    render();
+    closeModal();
+    showMessage(passVal ? 'Şifre kaydedildi.' : 'Şifre kaldırıldı.');
+  };
+  document.getElementById('turPassSaveBtn').addEventListener('click', saveIt);
+  passInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveIt(); });
+  overlay.classList.add('open');
+  setTimeout(() => passInput.focus(), 50);
+}
+
 function openTurList() {
-  const hatims = state.hatims || [];
+  const publicList = (state.hatims || []).map((h) => ({ h: h, priv: false }));
+  const privateList = (currentUser && privateState && privateState.hatims ? privateState.hatims : []).map((h) => ({ h: h, priv: true }));
+  const combined = privateList.concat(publicList); // kendi özel turların en üstte
   let listHtml;
-  if (hatims.length === 0) {
+  if (combined.length === 0) {
     listHtml = '<p class="sub">Henüz hiç tur yok.</p>';
   } else {
     listHtml = '<ul class="who-took-list">' +
-      hatims.map((h) => {
+      combined.map(({ h, priv }) => {
         const completed = h.cuzler.filter((e) => e && e.completed).length;
         const isSelected = h.id === selectedHatimId;
-        const deleteBtn = adminMode
-          ? '<button class="hatim-delete-btn" data-del-id="' + h.id + '" title="Bu turu sil" style="background:none;border:none;font-size:15px;cursor:pointer;padding:2px 4px;flex-shrink:0;opacity:0.7;">🗑️</button>'
+        const canDelete = priv ? !!currentUser : isAppAdmin();
+        const deleteBtn = canDelete
+          ? '<button class="hatim-delete-btn" data-del-id="' + h.id + '" data-priv="' + (priv ? '1' : '0') + '" title="Bu turu sil" style="background:none;border:none;font-size:15px;cursor:pointer;padding:2px 4px;flex-shrink:0;opacity:0.7;">🗑️</button>'
           : '';
         return '<li style="cursor:pointer;' + (isSelected ? ' font-weight:700;' : '') + '" data-id="' + h.id + '">' +
-          '<span>' + (isSelected ? '● ' : '') + (h.turPassword ? '🔒 ' : '') + escapeHtml(h.hatimName || 'Cevşen') + '</span>' +
-          '<span class="count">' + completed + ' / ' + TOTAL + ' okundu · ' + escapeHtml(h.createdDate || '') + '</span>' +
+          '<span class="li-text">' +
+            '<span>' + (isSelected ? '● ' : '') + (priv ? '🔒 ' : (h.turPassword ? '🔐 ' : '')) + escapeHtml(h.hatimName || 'Cevşen') + '</span>' +
+            '<span class="count">' + completed + ' / ' + TOTAL + ' okundu · ' + escapeHtml(h.createdDate || '') + '</span>' +
+          '</span>' +
           deleteBtn +
           '</li>';
       }).join('') +
@@ -2069,9 +2508,10 @@ function openTurList() {
   }
   modalContent.innerHTML =
     '<h2>Cevşen Turları</h2>' +
-    '<p class="sub">Görüntülemek istediğin tura dokun.' + (adminMode ? ' Silmek için 🗑️ ikonuna dokun.' : '') + '</p>' +
+    '<p class="sub">Görüntülemek istediğin tura dokun. 🔒 = sana özel, 🔐 = şifreli genel tur.' + ((isAppAdmin() || currentUser) ? ' Silmek için 🗑️ ikonuna dokun.' : '') + '</p>' +
     listHtml +
-    '<div class="modal-actions"><button class="btn btn-primary" id="turListCloseBtn">Kapat</button></div>';
+    '<div class="modal-actions"><button class="btn btn-ghost" id="turListBackBtn" style="width:100%;">← Menü</button><button class="btn btn-ghost" id="turListCloseBtn" style="width:100%;">Kapat</button></div>';
+  document.getElementById('turListBackBtn').addEventListener('click', openMainMenu);
   document.getElementById('turListCloseBtn').addEventListener('click', closeModal);
   modalContent.querySelectorAll('.who-took-list li').forEach((li) => {
     li.addEventListener('click', () => {
@@ -2083,60 +2523,61 @@ function openTurList() {
   modalContent.querySelectorAll('.hatim-delete-btn').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      deleteTur(btn.getAttribute('data-del-id'));
+      deleteTur(btn.getAttribute('data-del-id'), btn.getAttribute('data-priv') === '1');
     });
   });
   overlay.classList.add('open');
 }
 
-function deleteTur(id) {
-  const h = (state.hatims || []).find((x) => x.id === id);
+function deleteTur(id, isPriv) {
+  const h = isPriv
+    ? ((privateState && privateState.hatims) || []).find((x) => x.id === id)
+    : (state.hatims || []).find((x) => x.id === id);
   if (!h) return;
-  if (state.hatims.length <= 1) {
-    showMessage('Bu son tur — silinemez. Önce yeni bir tur ekleyip sonra bunu silebilirsin.');
+  if (!isPriv && state.hatims.length <= 1) {
+    showMessage('Bu son genel tur — silinemez. Önce yeni bir tur ekleyip sonra bunu silebilirsin.');
     return;
   }
   showConfirm('"' + (h.hatimName || 'Bu tur') + '" tamamen silinecek, geri alınamaz. Emin misin?', async () => {
     await refetchIfPossible();
-    state.hatims = (state.hatims || []).filter((x) => x.id !== id);
-    if (selectedHatimId === id) {
-      setSelectedHatimId(state.hatims[0] ? state.hatims[0].id : null);
+    if (isPriv) {
+      if (!currentUser) { closeModal(); return; }
+      privateState.hatims = (privateState.hatims || []).filter((x) => x.id !== id);
+      await setDoc(privateDocRef(currentUser.uid), privateState);
+    } else {
+      state.hatims = (state.hatims || []).filter((x) => x.id !== id);
+      await setDoc(stateDocRef(), state);
     }
-    await saveState();
+    if (selectedHatimId === id) {
+      const fallback = state.hatims[0] || (privateState && privateState.hatims && privateState.hatims[0]);
+      setSelectedHatimId(fallback ? fallback.id : null);
+    }
     render();
     openTurList();
   });
 }
 
 function openMainMenu() {
-  const adminToggleLabel = adminMode ? 'Yönetici Modunu Kapat 🔓' : 'Yönetici Modunu Aç 🔒';
-  const adminToggleClass = adminMode ? 'btn-help' : 'btn-ghost';
+  const accountLabel = currentUser ? '👤 Hesap Bilgilerim' : '👤 Giriş Yap / Kayıt Ol';
+  const h = getSelectedTur();
+  const showManage = isAppAdmin() || isTurOwnedPrivate(h);
   modalContent.innerHTML =
     '<h2>Menü</h2>' +
-    '<button class="btn ' + adminToggleClass + '" id="menuAdminToggle" style="width:100%; margin-bottom:8px;">' + adminToggleLabel + '</button>' +
-    '<button class="btn btn-ghost" id="menuWhoTook" style="width:100%; margin-bottom:8px;">Kim okudu?</button>' +
-    '<button class="btn btn-ghost" id="menuLeaderboard" style="width:100%; margin-bottom:8px;">En Çok Katkı Sağlayanlar</button>' +
-    '<button class="btn btn-ghost" id="menuChangeName" style="width:100%; margin-bottom:8px;">İsmini Değiştir</button>' +
-    '<button class="btn btn-ghost" id="menuShare" style="width:100%; margin-bottom:8px;">WhatsApp\'ta paylaş</button>' +
-    '<button class="btn btn-ghost" id="menuShareImage" style="width:100%; margin-bottom:8px;">📸 Özet Kartı Paylaş</button>' +
-    '<button class="btn btn-ghost" id="menuQr" style="width:100%; margin-bottom:8px;">QR kod</button>' +
-    '<button class="btn btn-ghost" id="menuTurList" style="width:100%; margin-bottom:8px;">Cevşen Turları</button>' +
-    '<button class="btn btn-help" id="menuNewTur" style="width:100%; margin-bottom:8px;">Yeni Tur Ekle</button>' +
-    '<button class="btn btn-danger" id="menuReset" style="width:100%; margin-bottom:8px;">Bu Turu Sıfırla</button>' +
-    '<button class="btn btn-ghost" id="menuGoHatim" style="width:100%;">📖 Hatim Listesi\'ne Geç</button>' +
+    '<button class="btn btn-ghost" id="menuAccount" style="width:100%; margin-bottom:8px;">' + accountLabel + '</button>' +
+    '<button class="btn btn-ghost" id="menuTurList" style="width:100%; margin-bottom:8px;">📋 Cevşen Turları</button>' +
+    '<button class="btn btn-help" id="menuNewTurChoice" style="width:100%; margin-bottom:8px;">➕ Yeni Tur Oluştur</button>' +
+    '<button class="btn btn-ghost" id="menuStats" style="width:100%; margin-bottom:8px;">📊 İstatistikler</button>' +
+    '<button class="btn btn-ghost" id="menuShareHub" style="width:100%; margin-bottom:8px;">📤 Paylaş</button>' +
+    (showManage ? '<button class="btn btn-ghost" id="menuManage" style="width:100%; margin-bottom:8px;">⚙️ Bu Turu Yönet</button>' : '') +
+    '<button class="btn btn-ghost" id="menuGoHatim" style="width:100%;">📖 Kuran Hatim Listesi\'ne Geç</button>' +
     '<div class="modal-actions" style="margin-top:12px;"><button class="btn btn-ghost" id="menuCloseBtn">Kapat</button></div>';
-  document.getElementById('menuAdminToggle').addEventListener('click', () => {
-    if (adminMode) { disableAdminMode(); } else { openAdminModeModal(); }
-  });
-  document.getElementById('menuWhoTook').addEventListener('click', openWhoTook);
-  document.getElementById('menuLeaderboard').addEventListener('click', openLeaderboard);
-  document.getElementById('menuChangeName').addEventListener('click', openChangeNameModal);
-  document.getElementById('menuShare').addEventListener('click', () => { closeModal(); shareOnWhatsApp(); });
-  document.getElementById('menuShareImage').addEventListener('click', () => { closeModal(); shareProgressImage(); });
-  document.getElementById('menuQr').addEventListener('click', openQrModal);
+  document.getElementById('menuAccount').addEventListener('click', () => { closeModal(); openAccountModal(); });
   document.getElementById('menuTurList').addEventListener('click', openTurList);
-  document.getElementById('menuNewTur').addEventListener('click', () => requireAdmin(startNewTur));
-  document.getElementById('menuReset').addEventListener('click', () => requireAdmin(resetAll));
+  document.getElementById('menuNewTurChoice').addEventListener('click', () => { closeModal(); openNewTurChoiceModal(); });
+  document.getElementById('menuStats').addEventListener('click', openStatsModal);
+  document.getElementById('menuShareHub').addEventListener('click', openShareModal);
+  const manageBtn = document.getElementById('menuManage');
+  if (manageBtn) manageBtn.addEventListener('click', () => { closeModal(); openManageTurModal(); });
   document.getElementById('menuGoHatim').addEventListener('click', () => { window.location.href = 'https://sadikerd.github.io/hatim-listesi/'; });
   document.getElementById('menuCloseBtn').addEventListener('click', closeModal);
   overlay.classList.add('open');
