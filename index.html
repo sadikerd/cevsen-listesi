@@ -2078,6 +2078,10 @@ function openStatsModal() {
 }
 
 function openNewTurChoiceModal() {
+  if (!currentUser) {
+    openLoginModal(openNewTurChoiceModal, 'Yeni bir tur oluşturmak için önce giriş yapman gerekiyor.');
+    return;
+  }
   modalContent.innerHTML =
     '<h2>Yeni Tur Oluştur</h2>' +
     '<p class="sub">Herkese açık mı olsun, yoksa sadece sana mı özel olsun?</p>' +
@@ -2094,19 +2098,43 @@ function openNewTurChoiceModal() {
 function openManageTurModal() {
   const h = getSelectedTur();
   const canReset = isAppAdmin() || isTurOwnedPrivate(h);
+  const isPublicAndCurrentUserCanClaim = currentUser && !isTurOwnedPrivate(h);
   modalContent.innerHTML =
     '<h2>Bu Turu Yönet</h2>' +
     '<p class="sub">"' + escapeHtml(h ? (h.hatimName || 'Cevşen') : 'Cevşen') + '" için:</p>' +
     (isAppAdmin() ? '<button class="btn btn-ghost" id="manageSetPassBtn" style="width:100%; margin-bottom:8px;">🔐 Bu Turu Şifrele</button>' : '') +
+    (isAppAdmin() && isPublicAndCurrentUserCanClaim ? '<button class="btn btn-help" id="manageMigrateBtn" style="width:100%; margin-bottom:8px;">📥 Bu Turu Hesabıma Taşı (Özel Yap)</button>' : '') +
     (canReset ? '<button class="btn btn-danger" id="manageResetBtn" style="width:100%; margin-bottom:8px;">Bu Turu Sıfırla</button>' : '') +
     '<div class="modal-actions"><button class="btn btn-ghost" id="manageBackBtn" style="width:100%;">← Menü</button><button class="btn btn-ghost" id="manageCloseBtn" style="width:100%;">Kapat</button></div>';
   document.getElementById('manageBackBtn').addEventListener('click', openMainMenu);
   document.getElementById('manageCloseBtn').addEventListener('click', closeModal);
   const setPassBtn = document.getElementById('manageSetPassBtn');
   if (setPassBtn) setPassBtn.addEventListener('click', () => { closeModal(); requireAdmin(openSetTurPasswordModal); });
+  const migrateBtn = document.getElementById('manageMigrateBtn');
+  if (migrateBtn) migrateBtn.addEventListener('click', () => requireAdmin(migrateTurToPrivate));
   const resetBtn = document.getElementById('manageResetBtn');
   if (resetBtn) resetBtn.addEventListener('click', () => { closeModal(); requireManage(resetAll); });
   overlay.classList.add('open');
+}
+
+async function migrateTurToPrivate() {
+  const h = getSelectedTur();
+  if (!h || !currentUser) return;
+  showConfirm('"' + (h.hatimName || 'Cevşen') + '" artık sadece senin hesabına bağlı, şifresiz bir özel tur olacak (eski şifresi kaldırılır). Genel listeden kaldırılacak. Emin misin?', async () => {
+    await refetchIfPossible();
+    const idx = (state.hatims || []).findIndex((x) => x.id === h.id);
+    if (idx === -1) { showMessage('Tur bulunamadı, sayfayı yenileyip tekrar dener misin?'); return; }
+    const migrated = state.hatims[idx];
+    migrated.turPassword = null;
+    state.hatims.splice(idx, 1);
+    if (!privateState) privateState = { hatims: [] };
+    privateState.hatims.unshift(migrated);
+    await setDoc(stateDocRef(), state);
+    await setDoc(privateDocRef(currentUser.uid), privateState);
+    render();
+    closeModal();
+    showMessage('"' + (migrated.hatimName || 'Cevşen') + '" artık senin özel turun — sadece sen görebilirsin.');
+  });
 }
 
 function openQrModal() {
