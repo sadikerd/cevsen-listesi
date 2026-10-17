@@ -1309,6 +1309,9 @@ function render() {
   if (isTurOwnedPrivate(h)) {
     visibilityBadge.textContent = '🔒 Bana Özel';
     visibilityBadge.className = 'visibility-badge private';
+  } else if (h.turPassword) {
+    visibilityBadge.textContent = '🔐 Genel · Şifreli';
+    visibilityBadge.className = 'visibility-badge private';
   } else {
     visibilityBadge.textContent = '🌍 Herkese Açık';
     visibilityBadge.className = 'visibility-badge public';
@@ -2384,7 +2387,7 @@ function showOnboardingModal() {
   modalContent.innerHTML =
     '<h2>Hoş geldin! 👋</h2>' +
     '<p class="sub">Artık kendi Cevşen turunu da oluşturabilirsin — istersen herkese açık, istersen sadece sana özel.</p>' +
-    '<p class="sub">Şu an ekranda gördüklerin <strong>"' + escapeHtml(h ? (h.hatimName || 'Cevşen') : 'Cevşen') + '"</strong> adlı, herkese açık (genel) bâblar.</p>' +
+    '<p class="sub">Şu an ekranda gördüklerin <strong>"' + escapeHtml(h ? (h.hatimName || 'Cevşen') : 'Cevşen') + '"</strong> adlı bir tur' + (h && h.turPassword ? ' — hesaba bağlı değil (teknik olarak "genel") ama ayrıca 🔐 <strong>şifreli</strong>, şifresini bilmeyen açamaz.' : ', herkese açık (genel) bâblar.') + '</p>' +
     '<p class="sub" style="margin-bottom:0;">Dilediğin zaman <strong>☰ Menü → Cevşen Turları</strong>\'ndan başka bir tura geçebilirsin.</p>' +
     '<div class="modal-actions" style="margin-top:14px;">' +
       '<button class="btn btn-ghost" id="onboardDismissBtn">Anladım, bu şekilde devam et</button>' +
