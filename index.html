@@ -1988,9 +1988,11 @@ function openAccountModal() {
   }
 
   const myName = getStoredName();
+  const myUid = currentUser.uid;
+  const isMine = (e) => e && e.completed && ((e.uid && e.uid === myUid) || (!e.uid && myName && e.name === myName));
   let totalCompleted = 0;
-  (state.hatims || []).forEach((h) => (h.cuzler || []).forEach((e) => { if (e && e.completed && myName && e.name === myName) totalCompleted++; }));
-  (privateState && privateState.hatims ? privateState.hatims : []).forEach((h) => (h.cuzler || []).forEach((e) => { if (e && e.completed && myName && e.name === myName) totalCompleted++; }));
+  (state.hatims || []).forEach((h) => (h.cuzler || []).forEach((e) => { if (isMine(e)) totalCompleted++; }));
+  (privateState && privateState.hatims ? privateState.hatims : []).forEach((h) => (h.cuzler || []).forEach((e) => { if (isMine(e)) totalCompleted++; }));
 
   const myTurs = (privateState && privateState.hatims) || [];
   const myTursHtml = myTurs.length === 0
@@ -2448,8 +2450,10 @@ async function markReadAndAdvance(index, name) {
     return;
   }
   if (!entry) {
-    entry = { name: name, date: todayStr(), completed: false, completedDate: null };
+    entry = { name: name, date: todayStr(), completed: false, completedDate: null, uid: (currentUser && currentUser.uid) || null };
     h.cuzler[index] = entry;
+  } else if (currentUser && !entry.uid) {
+    entry.uid = currentUser.uid; // sonradan giriş yapıldıysa, var olan kaydı da eşleştir
   }
   entry.completed = true;
   entry.completedDate = todayStr();
