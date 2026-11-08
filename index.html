@@ -1080,6 +1080,12 @@ function sanitizePrivateState(raw) {
   return raw;
 }
 
+async function savePrivateState() {
+  if (!currentUser || !privateState) return;
+  privateState.ownerEmail = currentUser.email || null;
+  await setDoc(privateDocRef(currentUser.uid), privateState);
+}
+
 async function loadPrivateState(uid) {
   try {
     const snap = await getDoc(privateDocRef(uid));
@@ -1087,7 +1093,7 @@ async function loadPrivateState(uid) {
       privateState = sanitizePrivateState(snap.data());
     } else {
       privateState = { hatims: [] };
-      await setDoc(privateDocRef(uid), privateState);
+      await savePrivateState();
     }
   } catch (e) {
     privateState = { hatims: [] };
@@ -1309,7 +1315,7 @@ async function saveState() {
   const h = getSelectedTur();
   try {
     if (h && isTurOwnedPrivate(h) && currentUser) {
-      await setDoc(privateDocRef(currentUser.uid), privateState);
+      await savePrivateState();
     } else {
       await setDoc(stateDocRef(), state);
     }
@@ -2240,7 +2246,7 @@ async function migrateTurToPrivate() {
     if (!privateState) privateState = { hatims: [] };
     privateState.hatims.unshift(migrated);
     await setDoc(stateDocRef(), state);
-    await setDoc(privateDocRef(currentUser.uid), privateState);
+    await savePrivateState();
     render();
     closeModal();
     showMessage('"' + (migrated.hatimName || 'Cevşen') + '" artık senin özel turun — sadece sen görebilirsin.');
@@ -2591,7 +2597,7 @@ async function startNewPrivateTur() {
   const newTur = freshTur('', creatorName);
   privateState.hatims.unshift(newTur);
   setSelectedHatimId(newTur.id);
-  await setDoc(privateDocRef(currentUser.uid), privateState);
+  await savePrivateState();
   render();
   showMessage('Özel turun oluşturuldu — bunu sadece sen görebilirsin.');
   openRoundEditor();
@@ -2699,7 +2705,7 @@ function deleteTur(id, isPriv) {
     if (isPriv) {
       if (!currentUser) { closeModal(); return; }
       privateState.hatims = (privateState.hatims || []).filter((x) => x.id !== id);
-      await setDoc(privateDocRef(currentUser.uid), privateState);
+      await savePrivateState();
     } else {
       state.hatims = (state.hatims || []).filter((x) => x.id !== id);
       await setDoc(stateDocRef(), state);
