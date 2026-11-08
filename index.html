@@ -62,12 +62,12 @@
   }
 
   header .logo {
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
+    width: 72px;
+    height: 72px;
+    object-fit: contain;
     margin-bottom: 6px;
-    border: 2px solid var(--gold-soft);
     box-shadow: 0 3px 10px rgba(38, 48, 31, 0.25);
+    border-radius: 50%;
   }
 
   header .kicker {
@@ -562,6 +562,33 @@
     color: var(--ink);
   }
 
+  .pw-field {
+    position: relative;
+    margin-bottom: 12px;
+  }
+
+  .pw-field input {
+    margin-bottom: 0 !important;
+    padding-right: 42px !important;
+  }
+
+  .pw-toggle-btn {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 32px;
+    height: 32px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    color: var(--ink-soft);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
   .modal input:focus {
     outline: none;
     border-color: var(--emerald);
@@ -961,7 +988,7 @@
 // ============================================================
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
 import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, sendEmailVerification } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, sendEmailVerification, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAy1lehu2PQlVgATudpbtzbv-v8-g0IoJs",
@@ -1799,7 +1826,30 @@ function authErrorText(e) {
   if (code.indexOf('wrong-password') !== -1 || code.indexOf('invalid-credential') !== -1) return 'E-posta veya şifre yanlış.';
   if (code.indexOf('user-not-found') !== -1) return 'Bu e-posta ile kayıtlı hesap yok.';
   if (code.indexOf('too-many-requests') !== -1) return 'Çok fazla deneme yapıldı, biraz sonra tekrar dene.';
+  if (code.indexOf('unauthorized-continue-uri') !== -1 || code.indexOf('invalid-continue-uri') !== -1) return 'Bu adresten gönderilemiyor (yerel test ortamı olabilir) — canlı siteden dener misin?';
   return 'Bir hata oluştu, tekrar dener misin?';
+}
+
+function passwordFieldHtml(id, placeholder, autocomplete) {
+  return '<div class="pw-field">' +
+    '<input type="password" id="' + id + '" placeholder="' + escapeHtml(placeholder) + '" autocomplete="' + autocomplete + '" required>' +
+    '<button type="button" class="pw-toggle-btn" id="' + id + 'ToggleBtn" tabindex="-1" title="Şifreyi göster/gizle">👁️</button>' +
+  '</div>';
+}
+
+function bindPasswordToggle(id) {
+  const input = document.getElementById(id);
+  const btn = document.getElementById(id + 'ToggleBtn');
+  if (!input || !btn) return;
+  btn.addEventListener('click', () => {
+    if (input.type === 'password') {
+      input.type = 'text';
+      btn.textContent = '🙈';
+    } else {
+      input.type = 'password';
+      btn.textContent = '👁️';
+    }
+  });
 }
 
 function openLoginModal(onSuccess, note) {
@@ -1809,18 +1859,56 @@ function openLoginModal(onSuccess, note) {
     '<p class="sub">' + escapeHtml(note || 'E-posta ve şifrenle giriş yap.') + '</p>' +
     '<form id="loginForm">' +
       '<input type="email" id="authEmailInput" name="email" placeholder="E-posta" autocomplete="username" required>' +
-      '<input type="password" id="authPassInput" name="password" placeholder="Şifre" autocomplete="current-password" required>' +
+      passwordFieldHtml('authPassInput', 'Şifre', 'current-password') +
       '<div class="modal-actions">' +
         '<button type="button" class="btn btn-ghost" id="authCancelBtn">Vazgeç</button>' +
         '<button type="submit" class="btn btn-primary" id="authLoginBtn">Giriş Yap</button>' +
       '</div>' +
     '</form>' +
-    '<p class="pin-hint" id="authSignupLink" style="text-align:center; margin-top:10px;">Hesabın yok mu? Kayıt ol →</p>';
+    '<p class="pin-hint" id="authForgotLink" style="text-align:center; margin-top:10px;">Şifreni mi unuttun? →</p>' +
+    '<p class="pin-hint" id="authSignupLink" style="text-align:center; margin-top:6px;">Hesabın yok mu? Kayıt ol →</p>';
   document.getElementById('authCancelBtn').addEventListener('click', closeModal);
   document.getElementById('loginForm').addEventListener('submit', (e) => { e.preventDefault(); doLogin(onSuccess); });
   document.getElementById('authSignupLink').addEventListener('click', () => openSignupModal(onSuccess, note));
+  document.getElementById('authForgotLink').addEventListener('click', () => openForgotPasswordModal(onSuccess, note));
+  bindPasswordToggle('authPassInput');
   overlay.classList.add('open');
   setTimeout(() => document.getElementById('authEmailInput').focus(), 50);
+}
+
+function openForgotPasswordModal(onSuccess, note) {
+  const prefill = (document.getElementById('authEmailInput') && document.getElementById('authEmailInput').value.trim()) || '';
+  modalContent.innerHTML =
+    '<h2>Şifreni Sıfırla</h2>' +
+    '<p class="sub">E-postanı yaz, sana şifreni sıfırlaman için bir link gönderelim.</p>' +
+    '<form id="forgotForm">' +
+      '<input type="email" id="forgotEmailInput" name="email" placeholder="E-posta" value="' + escapeHtml(prefill) + '" autocomplete="username" required>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn-ghost" id="forgotCancelBtn">← Geri</button>' +
+        '<button type="submit" class="btn btn-primary" id="forgotSendBtn">Gönder</button>' +
+      '</div>' +
+    '</form>';
+  document.getElementById('forgotCancelBtn').addEventListener('click', () => openLoginModal(onSuccess, note));
+  document.getElementById('forgotForm').addEventListener('submit', (e) => { e.preventDefault(); doSendPasswordReset(onSuccess, note); });
+  const inp = document.getElementById('forgotEmailInput');
+  overlay.classList.add('open');
+  setTimeout(() => inp.focus(), 50);
+}
+
+async function doSendPasswordReset(onSuccess, note) {
+  const email = document.getElementById('forgotEmailInput').value.trim();
+  if (!email) { showMessage('E-postanı yaz.'); return; }
+  try {
+    const isWebOrigin = window.location.origin && window.location.origin.indexOf('http') === 0;
+    if (isWebOrigin) {
+      await sendPasswordResetEmail(auth, email, { url: window.location.origin + '/' });
+    } else {
+      await sendPasswordResetEmail(auth, email);
+    }
+    showMessage('E-postana bir şifre sıfırlama linki gönderdik. Gelen kutunu (ve spam klasörünü) kontrol et.');
+  } catch (e) {
+    showMessage('Gönderilemedi: ' + authErrorText(e));
+  }
 }
 
 async function doLogin(onSuccess) {
@@ -1845,7 +1933,7 @@ function openSignupModal(onSuccess, note) {
       '<input type="text" id="authNameInput" name="name" placeholder="İsmin" autocomplete="name" required>' +
       '<p class="pin-hint" style="text-align:left; margin-top:-6px; cursor:default; text-decoration:none;">Bu isim, bâb okurken kullanacağın isim olacak.</p>' +
       '<input type="email" id="authEmailInput" name="email" placeholder="E-posta" autocomplete="username" required>' +
-      '<input type="password" id="authPassInput" name="new-password" placeholder="Şifre (en az 6 karakter)" autocomplete="new-password" required>' +
+      passwordFieldHtml('authPassInput', 'Şifre (en az 6 karakter)', 'new-password') +
       '<div class="modal-actions">' +
         '<button type="button" class="btn btn-ghost" id="authCancelBtn">Vazgeç</button>' +
         '<button type="submit" class="btn btn-primary" id="authSignupBtn">Kayıt Ol</button>' +
@@ -1855,6 +1943,7 @@ function openSignupModal(onSuccess, note) {
   document.getElementById('authCancelBtn').addEventListener('click', closeModal);
   document.getElementById('signupForm').addEventListener('submit', (e) => { e.preventDefault(); doSignup(onSuccess); });
   document.getElementById('authLoginLink').addEventListener('click', () => openLoginModal(onSuccess, note));
+  bindPasswordToggle('authPassInput');
   overlay.classList.add('open');
   setTimeout(() => document.getElementById('authNameInput').focus(), 50);
 }
@@ -1950,7 +2039,7 @@ function openChangePasswordModal() {
   modalContent.innerHTML =
     '<h2>Şifreni Değiştir</h2>' +
     '<p class="sub">Yeni şifreni yaz (en az 6 karakter).</p>' +
-    '<input type="password" id="newPassInput" placeholder="Yeni şifre" autocomplete="new-password" autofocus>' +
+    passwordFieldHtml('newPassInput', 'Yeni şifre', 'new-password') +
     '<div class="modal-actions">' +
       '<button class="btn btn-nav" id="passCancelBtn">← Geri</button>' +
       '<button class="btn btn-primary" id="passSaveBtn">Kaydet</button>' +
@@ -1959,6 +2048,7 @@ function openChangePasswordModal() {
   document.getElementById('passCancelBtn').addEventListener('click', openAccountModal);
   document.getElementById('passCloseBtn').addEventListener('click', closeModal);
   document.getElementById('passSaveBtn').addEventListener('click', doChangePassword);
+  bindPasswordToggle('newPassInput');
   const inp = document.getElementById('newPassInput');
   inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') doChangePassword(); });
   overlay.classList.add('open');
@@ -2171,6 +2261,7 @@ function openQrModal() {
 function loadImageSafe(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
+    img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('image failed'));
     img.src = src;
@@ -2198,8 +2289,18 @@ function fitTextFont(ctx, text, maxWidth, startSize, family, weight) {
 }
 
 async function shareProgressImage() {
+  const h0 = getSelectedTur();
+  if (isTurLocked(h0)) { showMessage('Bu tur özel — önce kilidi açman gerekiyor.'); return; }
+  showMessage('Görsel hazırlanıyor, birkaç saniye sürebilir…');
+  try {
+    await buildAndShareProgressImage();
+  } catch (e) {
+    showMessage('Görsel oluşturulurken bir sorun oldu: ' + (e && e.message ? e.message : 'bilinmeyen hata') + '. Tekrar dener misin?');
+  }
+}
+
+async function buildAndShareProgressImage() {
   const h = getSelectedTur();
-  if (isTurLocked(h)) { showMessage('Bu tur özel — önce kilidi açman gerekiyor.'); return; }
   const completedCount = h.cuzler.filter((e) => e && e.completed).length;
   const takenCount = h.cuzler.filter(Boolean).length;
   const pct = completedCount / TOTAL;
@@ -2281,31 +2382,31 @@ async function shareProgressImage() {
   ctx.font = '500 26px "Work Sans", sans-serif';
   ctx.fillText('Harmonie31', W / 2, H - 60);
 
-  canvas.toBlob(async (blob) => {
-    if (!blob) { showMessage('Görsel oluşturulamadı.'); return; }
-    const fileName = 'cevsen-ozet.png';
-    try {
-      const file = new File([blob], fileName, { type: 'image/png' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          files: [file],
-          title: 'Cevşen Özet',
-          text: (h.hatimName || 'Cevşen') + ' — ' + completedCount + '/' + TOTAL + ' tamamlandı 🌙'
-        });
-        return;
-      }
-    } catch (e) { /* paylaşım iptal edildi/desteklenmiyor — indirmeye düş */ }
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) { showMessage('Görsel oluşturulamadı — bu tarayıcı desteklemiyor olabilir.'); return; }
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-    showMessage('Görsel indirildi — bu tarayıcı direkt paylaşımı desteklemiyor. İndirilen resmi WhatsApp\'a elle ekleyip gönderebilirsin.');
-  }, 'image/png');
+  const fileName = 'cevsen-ozet.png';
+  try {
+    const file = new File([blob], fileName, { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: 'Cevşen Özet',
+        text: (h.hatimName || 'Cevşen') + ' — ' + completedCount + '/' + TOTAL + ' tamamlandı 🌙'
+      });
+      return;
+    }
+  } catch (e) { /* paylaşım iptal edildi/desteklenmiyor — indirmeye düş */ }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  showMessage('Görsel indirildi — bu tarayıcı direkt paylaşımı desteklemiyor. İndirilen resmi WhatsApp\'a elle ekleyip gönderebilirsin.');
 }
 
 function shareOnWhatsApp() {
