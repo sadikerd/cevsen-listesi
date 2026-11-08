@@ -1062,6 +1062,7 @@ let selectedHatimId = getStoredSelectedHatimId();
 
 // --- Giriş sistemi ve özel turlar ---
 let currentUser = null; // Firebase Auth kullanıcısı, giriş yapılmadıysa null
+let authStateResolved = false; // giriş durumu netleşene (özel tur verisi yüklenene) kadar true olmaz
 let privateState = null; // { hatims: [...] } — SADECE currentUser'ın özel turları
 let privateUnsub = null;
 
@@ -1117,6 +1118,7 @@ function isTurOwnedPrivate(h) {
 if (firebaseReady) {
   onAuthStateChanged(auth, (user) => {
     currentUser = user;
+    authStateResolved = true;
     if (privateUnsub) { privateUnsub(); privateUnsub = null; }
     if (user) {
       loadPrivateState(user.uid);
@@ -1263,6 +1265,11 @@ function getSelectedTur() {
     h = privateState.hatims.find((x) => x.id === selectedHatimId);
   }
   if (!h) {
+    // Henüz giriş/özel-tur durumu netleşmediyse, seçili ID özel bir tura ait olabilir —
+    // bu durumda geçici olarak ilk genel turu GÖSTER ama hafızadaki kaydı BOZMA.
+    if (!authStateResolved) {
+      return state.hatims[0];
+    }
     h = state.hatims[0];
     setSelectedHatimId(h.id);
   }
