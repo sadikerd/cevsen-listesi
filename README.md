@@ -2,7 +2,9 @@
 
 Association Harmonie31 bünyesinde okunan Cevşen-i Şerif için bâb dağılım ve takip uygulaması.
 
-🔗 **Canlı site:** [kullaniciadin.github.io/cevsen-listesi](https://kullaniciadin.github.io/cevsen-listesi/)
+🔗 **Canlı site:** 
+- [kullaniciadin.github.io/cevsen-listesi](https://kullaniciadin.github.io/cevsen-listesi/)
+- [https://cevsen.724oku.com/](https://cevsen.724oku.com/)
 
 ---
 
@@ -50,6 +52,7 @@ sistemini paylaşır ama tamamen ayrı bir Firebase projesi ve veritabanı kulla
 | 2.4 | Arapça satır aralığı sıkılaştırıldı; bâp değişince sayfa otomatik üste kayıyor; okuma sırasında ekranın kararmasını önleyen "wake lock" eklendi |
 | 2.5 | Özel/şifreli turlar (🔒), ekranın kararmasını önleme (wake lock), "Kim Okudu?" çubuk grafiğe döndü, WhatsApp mesajı kısaltıldı, son açılan tur/görünüm tercihi hatırlanıyor, paylaşılabilir özet kartı görseli eklendi |
 | 3.0 | Gerçek giriş sistemi (Firebase Authentication) eklendi — herkes kendi özel Cevşen turunu oluşturabiliyor, Hesap Bilgilerim ekranı (kendi turlarım, toplam okuduğum, isim/şifre değiştirme); yönetici artık şifreyle değil, giriş yapılan hesabın kimliğiyle belirleniyor; menü sadeleştirildi, her alt ekrana "← Menü" ve "Kapat" butonları eklendi |
+| 3.1 | Logo güncellendi — pastel lila halka eklendi, başlıktaki logo kutusunun boyut/kırpma sorunu düzeltildi; şifre göster/gizle butonu ve "Şifremi Unuttum" (gerçek e-posta ile sıfırlama) eklendi |
 
 ---
 <p align="center"><i>Harmonie31 için sevgiyle hazırlandı 🌙</i></p>
